@@ -1,4 +1,24 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gantt Planner Standalone</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { background: #f8fafc; }
+    .gantt-scrollbar::-webkit-scrollbar { height: 8px; background: #e2e8f0; }
+    .gantt-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+  </style>
+</head>
+<body class="min-h-screen">
+  <div id="root"></div>
+  <script type="text/babel">
+
+const { useState, useEffect, useMemo, useRef } = React;
 
 /**
  * Gantt Planner – Markdown‑driven
@@ -23,7 +43,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
  * - Auto recalculation after each drag or input change
  */
 
-export default function App() {
+function App() {
   // -------------------- UI State --------------------
   const [markdown, setMarkdown] = useState(`| Epic | Task description | Estimated time in hours | Start date | Customer Request |\n| --- | --- | ---: | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova |\n| Products | Default product visibility for all | 0 | | Ventinova |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova |`);
   const [speed, setSpeed] = useState(1.0); // developers-equivalent
@@ -107,7 +127,6 @@ export default function App() {
       }
     }
     setStarts(current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tasksWithIds.length]);
 
   // -------------------- Scheduling Engine --------------------
@@ -129,11 +148,7 @@ export default function App() {
   }, [startDate, schedule.horizonDays, skipWeekends]);
 
   // -------------------- Drag to move --------------------
-  const dragState = useRef<null | {
-    id: string;
-    startPixelX: number;
-    initialStartIdx: number;
-  }>(null);
+  const dragState = useRef(null);
 
   // grid config
   const [cellWidth, setCellWidth] = useState(32); // px per day
@@ -379,7 +394,7 @@ export default function App() {
                           </svg>
                           <span className="h-3 w-3 rounded-full" style={{ backgroundColor: colorForEpic(epic) }} />
                           <span>{epic}</span>
-                          <span className="text-xs font-normal text-slate-600 ml-2">({(tasks as Task[]).length} tasks)</span>
+                          <span className="text-xs font-normal text-slate-600 ml-2">({tasks.length} tasks)</span>
                         </div>
                         <div className="sticky left-[250px] z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300"></div>
                         {/* Empty cells for timeline */}
@@ -411,7 +426,7 @@ export default function App() {
                       </div>
                       
                       {/* Tasks for this Epic - only show if not folded */}
-                      {!isFolded && (tasks as Task[]).map((t) => {
+                      {!isFolded && tasks.map((t) => {
                       const row = schedule.rows[t.id];
                       const color = colorForEpic(t.epic);
                       return (
@@ -504,7 +519,7 @@ export default function App() {
 }
 
 // -------------------- Components --------------------
-function EpicLegend({ tasks }: { tasks: Task[] }) {
+function EpicLegend({ tasks }) {
   const epics = useMemo(() => Array.from(new Set(tasks.map((t) => t.epic))), [tasks]);
   if (!epics.length) return null;
   return (
@@ -519,22 +534,6 @@ function EpicLegend({ tasks }: { tasks: Task[] }) {
   );
 }
 
-// -------------------- Types --------------------
-interface Task {
-  id: string;
-  epic: string;
-  desc: string;
-  hours: number; // estimated hours
-  startDateStr?: string; // optional start date from markdown
-  customerRequest?: string; // optional customer request from markdown
-}
-
-interface ScheduleResult {
-  horizonDays: number;
-  rows: Record<string, { start: number; durationDays: number; endExclusive: number }>;
-  finishDate: Date | null;
-}
-
 // -------------------- Scheduling Core --------------------
 function computeSchedule({
   tasks,
@@ -543,14 +542,7 @@ function computeSchedule({
   hoursPerDay,
   skipWeekends,
   startDateISO,
-}: {
-  tasks: Task[];
-  starts: Record<string, number>;
-  speed: number;
-  hoursPerDay: number;
-  skipWeekends: boolean;
-  startDateISO: string;
-}): ScheduleResult {
+}) {
   const N = Math.max(1, tasks.length);
   const perDayCap = Math.max(1e-6, speed * hoursPerDay);
   const sumHours = tasks.reduce((a, t) => a + t.hours, 0);
@@ -560,7 +552,7 @@ function computeSchedule({
   const maxHorizon = clamp(worstDays, 14, 730);
 
   // Initialize durations with no concurrency
-  const durations = new Map<string, number>();
+  const durations = new Map();
   for (const t of tasks) {
     const d0 = Math.max(1, Math.ceil(t.hours / perDayCap));
     durations.set(t.id, d0);
@@ -608,7 +600,7 @@ function computeSchedule({
 
   // Build rows & find max end
   let maxEnd = 0;
-  const rows: ScheduleResult["rows"] = {};
+  const rows = {};
   for (const t of tasks) {
     const start = starts[t.id] ?? 0; // Allow negative starts
     const durationDays = clamp(durations.get(t.id) ?? 1, 1, H - Math.max(0, start));
@@ -624,7 +616,7 @@ function computeSchedule({
 }
 
 // -------------------- Markdown Parser --------------------
-function parseMarkdownTable(md: string): Task[] {
+function parseMarkdownTable(md) {
   const lines = md
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -642,7 +634,7 @@ function parseMarkdownTable(md: string): Task[] {
   let startIdx = 0;
   if (/Epic/i.test(maybeHeader) && /Task/i.test(maybeHeader)) startIdx = 1;
 
-  const parsed: Task[] = [];
+  const parsed = [];
   for (let i = startIdx; i < dataRows.length; i++) {
     const cols = dataRows[i]
       .split("|")
@@ -660,12 +652,12 @@ function parseMarkdownTable(md: string): Task[] {
   return parsed;
 }
 
-function sanitizeCell(s: string): string {
+function sanitizeCell(s) {
   // Strip Markdown emphasis and trailing pipes/spaces
   return s.replace(/^[*_`\s]+|[*_`\s]+$/g, "").replace(/\\\|/g, "|");
 }
 
-function parseHours(s: string): number {
+function parseHours(s) {
   // Accept forms: 30, 30h, ~30h, ≈30, 30.5
   const m = String(s).match(/([0-9]+(?:\.[0-9]+)?)/);
   if (!m) return 0;
@@ -673,14 +665,14 @@ function parseHours(s: string): number {
 }
 
 // -------------------- Date & Grid Helpers --------------------
-function isWeekend(d: Date) {
+function isWeekend(d) {
   const day = d.getDay();
   return day === 0 || day === 6; // Sun or Sat
 }
 
-function buildWorkingDays({ startISO, count, skipWeekends }: { startISO: string; count: number; skipWeekends: boolean }): Date[] {
+function buildWorkingDays({ startISO, count, skipWeekends }) {
   const start = isoToLocalDate(startISO);
-  const out: Date[] = [];
+  const out = [];
   let d = new Date(start.getTime());
   while (out.length < count) {
     if (!skipWeekends || !isWeekend(d)) out.push(new Date(d.getTime()));
@@ -689,7 +681,7 @@ function buildWorkingDays({ startISO, count, skipWeekends }: { startISO: string;
   return out;
 }
 
-function isoToLocalDate(iso: string): Date {
+function isoToLocalDate(iso) {
   const [y, m, d] = iso.split("-").map((x) => parseInt(x, 10));
   // Create local date (00:00) to avoid TZ drift
   const dt = new Date();
@@ -698,27 +690,27 @@ function isoToLocalDate(iso: string): Date {
   return dt;
 }
 
-function formatShortDate(d: Date): string {
+function formatShortDate(d) {
   const mm = d.toLocaleDateString(undefined, { month: "short" });
   const dd = d.getDate();
   return `${mm} ${dd}`;
 }
 
-function formatLongDate(d: Date): string {
+function formatLongDate(d) {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 // -------------------- Utils --------------------
-function clamp(v: number, lo: number, hi: number) {
+function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
 }
 
-function parseFloatSafe(v: string, def: number) {
+function parseFloatSafe(v, def) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : def;
 }
 
-function hashId(s: string): string {
+function hashId(s) {
   let h = 2166136261 >>> 0; // FNV-1a
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -727,7 +719,7 @@ function hashId(s: string): string {
   return `t_${(h >>> 0).toString(36)}`;
 }
 
-function colorForEpic(epic: string): string {
+function colorForEpic(epic) {
   // Deterministic pastel via HSL
   let h = 0;
   for (let i = 0; i < epic.length; i++) h = (h * 31 + epic.charCodeAt(i)) % 360;
@@ -736,3 +728,10 @@ function colorForEpic(epic: string): string {
   const light = 65;
   return `hsl(${hue} ${sat}% ${light}%)`;
 }
+
+
+// Mount the app
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
