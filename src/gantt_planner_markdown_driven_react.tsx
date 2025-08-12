@@ -25,10 +25,23 @@ import VersionChecker from "./VersionChecker";
  */
 
 export default function App() {
+
   // -------------------- UI State --------------------
-  // Load markdown from localStorage if available
+  // Helper to get query params
+  const getQueryParam = (key) => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get(key);
+  };
+
+  // Load markdown from query param, localStorage, or default
   const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request |\n| --- | --- | ---: | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova |\n| Products | Default product visibility for all | 0 | | Ventinova |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova |`;
   const [markdown, setMarkdown] = useState(() => {
+    const qp = getQueryParam('mdTable');
+    if (qp) {
+      const decodedMarkdown = decodeURIComponent(qp);
+      // If it doesn't have headers, add them
+      return ensureMarkdownHeaders(decodedMarkdown);
+    }
     try {
       const cached = localStorage.getItem('ganttMarkdownTable');
       return cached || defaultMarkdown;
@@ -42,8 +55,15 @@ export default function App() {
       localStorage.setItem('ganttMarkdownTable', markdown);
     } catch (e) {}
   }, [markdown]);
-  // LocalStorage-backed state for settings fields
-  const getCached = (key, fallback) => {
+
+  // LocalStorage-backed state for settings fields, but allow query param override
+  const getCachedOrQuery = (key, fallback, qpKey) => {
+    const qp = getQueryParam(qpKey || key);
+    if (qp !== null) {
+      if (typeof fallback === 'boolean') return qp === 'true';
+      if (typeof fallback === 'number') return Number(qp);
+      return qp;
+    }
     try {
       const v = localStorage.getItem(key);
       if (v === null) return fallback;
@@ -55,13 +75,13 @@ export default function App() {
     }
   };
 
-  const [speed, setSpeed] = useState(() => getCached('ganttSpeed', 1.0));
-  const [hoursPerDay, setHoursPerDay] = useState(() => getCached('ganttHoursPerDay', 8));
+  const [speed, setSpeed] = useState(() => getCachedOrQuery('ganttSpeed', 1.0, 'speed'));
+  const [hoursPerDay, setHoursPerDay] = useState(() => getCachedOrQuery('ganttHoursPerDay', 8, 'hoursPerDay'));
   const todayISO = new Date().toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState(() => getCached('ganttStartDate', todayISO));
-  const [skipWeekends, setSkipWeekends] = useState(() => getCached('ganttSkipWeekends', true));
+  const [startDate, setStartDate] = useState(() => getCachedOrQuery('ganttStartDate', todayISO, 'startDate'));
+  const [skipWeekends, setSkipWeekends] = useState(() => getCachedOrQuery('ganttSkipWeekends', true, 'skipWeekends'));
   // Filter and folding state
-  const [customerFilter, setCustomerFilter] = useState(() => getCached('ganttCustomerFilter', ""));
+  const [customerFilter, setCustomerFilter] = useState(() => getCachedOrQuery('ganttCustomerFilter', "", 'customerFilter'));
 
   // Persist settings fields to localStorage
   useEffect(() => {
@@ -348,19 +368,37 @@ export default function App() {
     >
       <VersionChecker />
       <div className="mx-auto max-w-[2000px] p-4 md:p-6 flex flex-col w-full">
-        <div className="flex items-center gap-4 mt-2">
-            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-600">Rekonnect planner</h1>
-          <p className="text-sm text-slate-600">
-            Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
-          </p>
-        </div>
+        <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-600">Rekonnect planner</h1>
+      <p className="text-sm text-slate-600">
+        Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date | Customer Request). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
+      </p>
 
   {/* Editor/Settings Section */}
 
         {/* Editor/Settings Section */}
         <div className="mt-4 w-full">
           <div className="rounded-2xl bg-white shadow p-3 md:p-4 w-full">
-            <label className="text-sm font-medium">Markdown table</label>
+            <div className="flex items-center justify-between">
+              <label className="text-sm font-medium">Markdown table</label>
+              <button
+                className="px-3 py-2 bg-green-500 hover:bg-green-600 text-white text-sm font-medium rounded-lg"
+                title="Open shareable URL with current form data"
+                onClick={() => {
+                  const dataOnlyMarkdown = extractDataRows(markdown);
+                  const params = new URLSearchParams({
+                    mdTable: encodeURIComponent(dataOnlyMarkdown),
+                    speed: String(speed),
+                    hoursPerDay: String(hoursPerDay),
+                    startDate: String(startDate),
+                    skipWeekends: String(skipWeekends),
+                    customerFilter: String(customerFilter)
+                  });
+                  window.open(`${window.location.pathname}?${params.toString()}`, '_blank');
+                }}
+              >
+                Open Shareable URL
+              </button>
+            </div>
             <textarea
               value={markdown}
               onChange={(e) => setMarkdown(e.target.value)}
@@ -441,6 +479,21 @@ export default function App() {
             </div>
 
             <EpicLegend tasks={tasksWithIds} />
+
+
+            {/* Continuously update URL in address bar as form changes */}
+            {React.useEffect(() => {
+              const dataOnlyMarkdown = extractDataRows(markdown);
+              const params = new URLSearchParams({
+                mdTable: encodeURIComponent(dataOnlyMarkdown),
+                speed: String(speed),
+                hoursPerDay: String(hoursPerDay),
+                startDate: String(startDate),
+                skipWeekends: String(skipWeekends),
+                customerFilter: String(customerFilter)
+              });
+              window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
+            }, [markdown, speed, hoursPerDay, startDate, skipWeekends, customerFilter])}
 
             <div className="mt-3 text-xs text-slate-500">
               <p>
@@ -837,6 +890,55 @@ function parseMarkdownTable(md: string): Task[] {
 function sanitizeCell(s: string): string {
   // Strip Markdown emphasis and trailing pipes/spaces
   return s.replace(/^[*_`\s]+|[*_`\s]+$/g, "").replace(/\\\|/g, "|");
+}
+
+function extractDataRows(md: string): string {
+  const lines = md
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  // Find table rows containing pipes
+  const rows = lines.filter((l) => /\|/.test(l));
+  if (rows.length === 0) return "";
+
+  // Remove header separator lines (---)
+  const dataRows = rows.filter((l) => !/^\|?\s*-{2,}/.test(l));
+
+  // If header present, drop it
+  const maybeHeader = dataRows[0];
+  let startIdx = 0;
+  if (dataRows.length > 0 && /Epic/i.test(maybeHeader) && /Task/i.test(maybeHeader)) {
+    startIdx = 1;
+  }
+
+  // Return only the data rows
+  return dataRows.slice(startIdx).join('\n');
+}
+
+function ensureMarkdownHeaders(md: string): string {
+  const lines = md
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  // Find table rows containing pipes
+  const rows = lines.filter((l) => /\|/.test(l));
+  if (rows.length === 0) return md;
+
+  // Check if first row looks like a header
+  const firstRow = rows[0];
+  const hasHeader = /Epic/i.test(firstRow) && /Task/i.test(firstRow);
+  
+  if (hasHeader) {
+    return md; // Already has headers
+  }
+
+  // Add headers to the beginning
+  const header = "| Epic | Task description | Estimated time in hours | Start date | Customer Request |";
+  const separator = "| --- | --- | ---: | --- | --- |";
+  
+  return `${header}\n${separator}\n${md}`;
 }
 
 function parseHours(s: string): number {
