@@ -25,16 +25,76 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 
 export default function App() {
   // -------------------- UI State --------------------
-  const [markdown, setMarkdown] = useState(`| Epic | Task description | Estimated time in hours | Start date | Customer Request |\n| --- | --- | ---: | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova |\n| Products | Default product visibility for all | 0 | | Ventinova |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova |`);
-  const [speed, setSpeed] = useState(1.0); // developers-equivalent
-  const [hoursPerDay, setHoursPerDay] = useState(8);
-  const [skipWeekends, setSkipWeekends] = useState(true);
+  // Load markdown from localStorage if available
+  const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request |\n| --- | --- | ---: | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova |\n| Products | Default product visibility for all | 0 | | Ventinova |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova |`;
+  const [markdown, setMarkdown] = useState(() => {
+    try {
+      const cached = localStorage.getItem('ganttMarkdownTable');
+      return cached || defaultMarkdown;
+    } catch {
+      return defaultMarkdown;
+    }
+  });
+  // Save markdown to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('ganttMarkdownTable', markdown);
+    } catch (e) {}
+  }, [markdown]);
+  // LocalStorage-backed state for settings fields
+  const getCached = (key, fallback) => {
+    try {
+      const v = localStorage.getItem(key);
+      if (v === null) return fallback;
+      if (typeof fallback === 'boolean') return v === 'true';
+      if (typeof fallback === 'number') return Number(v);
+      return v;
+    } catch {
+      return fallback;
+    }
+  };
+
+  const [speed, setSpeed] = useState(() => getCached('ganttSpeed', 1.0));
+  const [hoursPerDay, setHoursPerDay] = useState(() => getCached('ganttHoursPerDay', 8));
   const todayISO = new Date().toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState(todayISO);
-  
+  const [startDate, setStartDate] = useState(() => getCached('ganttStartDate', todayISO));
+  const [skipWeekends, setSkipWeekends] = useState(() => getCached('ganttSkipWeekends', true));
   // Filter and folding state
-  const [customerFilter, setCustomerFilter] = useState(""); // Empty means show all
+  const [customerFilter, setCustomerFilter] = useState(() => getCached('ganttCustomerFilter', ""));
+
+  // Persist settings fields to localStorage
+  useEffect(() => {
+    try { localStorage.setItem('ganttSpeed', String(speed)); } catch (e) {}
+  }, [speed]);
+  useEffect(() => {
+    try { localStorage.setItem('ganttHoursPerDay', String(hoursPerDay)); } catch (e) {}
+  }, [hoursPerDay]);
+  useEffect(() => {
+    try { localStorage.setItem('ganttStartDate', String(startDate)); } catch (e) {}
+  }, [startDate]);
+  useEffect(() => {
+    try { localStorage.setItem('ganttSkipWeekends', String(skipWeekends)); } catch (e) {}
+  }, [skipWeekends]);
+  useEffect(() => {
+    try { localStorage.setItem('ganttCustomerFilter', String(customerFilter)); } catch (e) {}
+  }, [customerFilter]);
   const [foldedEpics, setFoldedEpics] = useState(new Set()); // Set of folded epic names
+  const [versionInfo, setVersionInfo] = useState({ version: '', buildDate: '', commit: '' });
+
+  // Load version information
+  useEffect(() => {
+    fetch('/version.json')
+      .then(response => response.json())
+      .then(data => setVersionInfo(data))
+      .catch(() => {
+        // Fallback to current date if version.json is not available
+        setVersionInfo({
+          version: 'v1.0.0',
+          buildDate: new Date().toISOString(),
+          commit: 'dev'
+        });
+      });
+  }, []);
 
   // Parsed tasks from Markdown
   const tasks = useMemo(() => parseMarkdownTable(markdown), [markdown]);
@@ -212,6 +272,47 @@ export default function App() {
     setMarkdown(updatedLines.join('\n'));
   };
 
+  // Function to reset Gantt planning and recalculate sequential dates
+  const resetGanttPlanning = () => {
+    // First, clear all start dates from the markdown table
+    const lines = markdown.split(/\r?\n/);
+    const updatedLines = lines.map(line => {
+      if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
+        return line;
+      }
+      
+      const cols = line.split('|').map(c => c.trim());
+      if (cols.length < 4) return line; // Skip lines that don't have enough columns
+      
+      // Clear the fourth column (start date) but preserve structure
+      cols[4] = ' '; // Empty start date
+      
+      // Ensure we preserve the fifth column (customer request) if it exists
+      if (cols.length < 6) {
+        cols[5] = ' '; // Add empty customer request column if missing
+      }
+      
+      return cols.join('|');
+    });
+    
+    // Update markdown first
+    setMarkdown(updatedLines.join('\n'));
+    
+    // Reset starts to sequential order (one task at a time)
+    const newStarts = {};
+    let cursor = 0;
+    
+    for (const task of tasksWithIds) {
+      newStarts[task.id] = cursor;
+      // Calculate naive duration for this task (no concurrency)
+      const cap = Math.max(1e-6, speed * hoursPerDay);
+      const duration = Math.max(1, Math.ceil(task.hours / cap));
+      cursor += duration; // Move cursor to start of next task
+    }
+    
+    setStarts(newStarts);
+  };
+
   // -------------------- Render --------------------
   return (
     <div
@@ -220,7 +321,7 @@ export default function App() {
     >
       <div className="mx-auto max-w-[1800px] p-4 md:p-6 flex flex-col w-full">
         <div className="flex items-center gap-4 mt-2">
-            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-800">Rekonnect planner</h1>
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-600">Rekonnect planner</h1>
           <p className="text-sm text-slate-600">
             Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
           </p>
@@ -281,6 +382,17 @@ export default function App() {
                   className="h-4 w-4"
                 />
                 <label htmlFor="skipW" className="text-sm">Skip weekends</label>
+              </div>
+              
+              {/* Reset Gantt Planning Button */}
+              <div className="flex items-center mt-5">
+                <button
+                  onClick={resetGanttPlanning}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors duration-200"
+                  title="Reset all dates and recalculate tasks sequentially (one at a time)"
+                >
+                  Reset & Recalculate Sequential
+                </button>
               </div>
             </div>
 
@@ -503,6 +615,13 @@ export default function App() {
         <div className="mt-4 text-xs text-slate-500">
           <p>
             Assumptions: Capacity per day = <code>speed × hoursPerDay</code>. If <em>k</em> tasks overlap on a day, each receives <code>1/k</code> of that capacity. Durations converge via a small iterative solver after every move/change. You can toggle weekends and adjust hours/day.
+          </p>
+        </div>
+
+        {/* Version Information */}
+        <div className="mt-6 text-center">
+          <p className="text-xs text-slate-400">
+            {versionInfo.version} • Built {versionInfo.buildDate ? new Date(versionInfo.buildDate).toLocaleString() : 'Unknown'} • {versionInfo.commit}
           </p>
         </div>
       </div>

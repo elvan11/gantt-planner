@@ -1,0 +1,68 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Update version.json before build
+      run: |
+        # Get current date in ISO format
+        BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
+        
+        # Get short commit hash
+        COMMIT_HASH=$(git rev-parse --short HEAD)
+        
+        # Get version from package.json if it exists, otherwise use v1.0.0
+        if [ -f package.json ]; then
+          VERSION="v$(node -p "require('./package.json').version" 2>/dev/null || echo "1.0.0")"
+        else
+          VERSION="v1.0.0"
+        fi
+        
+        # Create version.json
+        cat > public/version.json << EOF
+        {
+          "version": "$VERSION",
+          "buildDate": "$BUILD_DATE",
+          "commit": "$COMMIT_HASH"
+        }
+        EOF
+        
+        echo "Updated version.json with:"
+        echo "Version: $VERSION"
+        echo "Build Date: $BUILD_DATE"
+        echo "Commit: $COMMIT_HASH"
+
+    - name: Build
+      run: npm run build
+
+    - name: Test
+      run: npm test -- --coverage --watchAll=false
+      continue-on-error: true
+
+    - name: Deploy to GitHub Pages
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./build
+        user_name: 'github-actions[bot]'
+        user_email: 'github-actions[bot]@users.noreply.github.com'
