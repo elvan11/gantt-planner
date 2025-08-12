@@ -1,3 +1,10 @@
+
+# Rekonnect Gantt Planner
+
+## What does this app do?
+
+Rekonnect Gantt Planner is a markdown-driven project planning tool. Paste a markdown table with columns for Epic, Task description, Estimated time in hours, Start date, and Customer Request. The app visualizes your tasks as a Gantt chart, lets you drag bars to adjust schedules, and automatically recalculates durations and start dates based on developer capacity and concurrency. Customer requests are shown as badges, and tasks are colored by Epic. The app supports filtering, folding epics, and skipping weekends for realistic project timelines.
+
 # Getting Started with Create React App
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
@@ -68,3 +75,7 @@ This section has moved here: [https://facebook.github.io/create-react-app/docs/d
 ### `npm run build` fails to minify
 
 This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+
+
+## Deploy
+Run: `npm run deploy`

@@ -2,3 +2,8 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+body {
+	font-family: 'Poppins', 'Segoe UI', Arial, sans-serif;
+	background: linear-gradient(120deg,#c1e2c6 0%,#c6d4ed 100%);
+}

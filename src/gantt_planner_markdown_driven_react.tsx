@@ -214,10 +214,17 @@ export default function App() {
 
   // -------------------- Render --------------------
   return (
-    <div className="min-h-screen w-full bg-slate-50 text-slate-900">
+    <div
+      className="min-h-screen w-full text-slate-900"
+      style={{ background: "linear-gradient(120deg,#c1e2c6 0%,#c6d4ed 100%)" }}
+    >
       <div className="mx-auto max-w-[1800px] p-4 md:p-6 flex flex-col w-full">
-        <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">Markdown → Gantt Planner</h1>
-        <p className="text-sm text-slate-600 mt-1">Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.</p>
+        <div className="flex items-center gap-4 mt-2">
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-800">Rekonnect planner</h1>
+          <p className="text-sm text-slate-600">
+            Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
+          </p>
+        </div>
 
   {/* Editor/Settings Section */}
 
@@ -420,7 +427,7 @@ export default function App() {
                           <div className="sticky left-0 z-10 bg-white flex items-start gap-3 px-4 py-2 h-full border-b border-slate-100 border-r border-slate-200">
                             <div className="h-3 w-3 rounded-full flex-shrink-0 mt-0.5" style={{ backgroundColor: color }} />
                             <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium leading-tight break-words whitespace-normal text-slate-800" style={{ wordBreak: 'break-word' }} title={`${t.desc}`}>{t.desc}</div>
+                              <div className="text-sm leading-tight break-words whitespace-normal text-slate-800" style={{ wordBreak: 'break-word' }} title={`${t.desc}`}>{t.desc}</div>
                               <div className="text-xs text-slate-500 mt-0.5">{t.epic} • {t.hours}h</div>
                             </div>
                           </div>
