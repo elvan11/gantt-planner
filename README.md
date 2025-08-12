@@ -128,4 +128,4 @@ This information is automatically updated with each deployment.
 ## Deploy
 ~~Run: `npm run deploy`~~ 
 
-**Note:** Manual deployment is no longer necessary. The app deploys automatically on every push to main branch.
+**Note:** Manual deployment is no longer necessary. The app deploys automatically on every push to main branch. Not fully tested yet.
