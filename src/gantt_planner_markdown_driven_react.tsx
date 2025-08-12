@@ -257,12 +257,25 @@ export default function App() {
           startDateStr = actualStart.toISOString().slice(0, 10);
         }
         
-        // Update the fourth column (start date)
-        cols[4] = ` ${startDateStr} `;
+        // Detect current structure: check if col4 looks like a date or customer request
+        const col4 = sanitizeCell(cols[3]);
+        const isCurrentlyDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
         
-        // Ensure we preserve the fifth column (customer request) if it exists
-        if (cols.length < 6) {
-          cols[5] = ' '; // Add empty customer request column if missing
+        if (isCurrentlyDateLike || cols.length >= 6) {
+          // Current structure: Epic | Task | Hours | Date | Customer
+          // Update the fourth column (start date)
+          cols[4] = ` ${startDateStr} `;
+          
+          // Ensure we preserve the fifth column (customer request) if it exists
+          if (cols.length < 6) {
+            cols[5] = ' '; // Add empty customer request column if missing
+          }
+        } else {
+          // Current structure: Epic | Task | Hours | Customer (no date column)
+          // We need to insert a date column
+          const customerRequest = cols[4] || '';
+          cols[4] = ` ${startDateStr} `;
+          cols[5] = ` ${customerRequest} `;
         }
       }
       
@@ -284,12 +297,25 @@ export default function App() {
       const cols = line.split('|').map(c => c.trim());
       if (cols.length < 4) return line; // Skip lines that don't have enough columns
       
-      // Clear the fourth column (start date) but preserve structure
-      cols[4] = ' '; // Empty start date
+      // Detect current structure: check if col4 looks like a date or customer request
+      const col4 = sanitizeCell(cols[3]);
+      const isCurrentlyDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
       
-      // Ensure we preserve the fifth column (customer request) if it exists
-      if (cols.length < 6) {
-        cols[5] = ' '; // Add empty customer request column if missing
+      if (isCurrentlyDateLike || cols.length >= 6) {
+        // Current structure: Epic | Task | Hours | Date | Customer
+        // Clear the fourth column (start date) but preserve structure
+        cols[4] = ' '; // Empty start date
+        
+        // Ensure we preserve the fifth column (customer request) if it exists
+        if (cols.length < 6) {
+          cols[5] = ' '; // Add empty customer request column if missing
+        }
+      } else {
+        // Current structure: Epic | Task | Hours | Customer (no date column)
+        // We need to insert an empty date column and move customer to col5
+        const customerRequest = cols[4] || '';
+        cols[4] = ' '; // Empty start date
+        cols[5] = ` ${customerRequest} `;
       }
       
       return cols.join('|');
@@ -388,7 +414,7 @@ export default function App() {
               <div className="flex items-center mt-5">
                 <button
                   onClick={resetGanttPlanning}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium rounded-lg transition-colors duration-200"
+                  className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-lg transition-colors duration-200"
                   title="Reset all dates and recalculate tasks sequentially (one at a time)"
                 >
                   Reset & Recalculate Sequential
@@ -778,8 +804,28 @@ function parseMarkdownTable(md: string): Task[] {
     const epic = sanitizeCell(cols[0]);
     const desc = sanitizeCell(cols[1]);
     const hours = parseHours(cols[2]);
-    const startDateStr = cols.length > 3 ? sanitizeCell(cols[3]) : "";
-    const customerRequest = cols.length > 4 ? sanitizeCell(cols[4]) : "";
+    
+    let startDateStr = "";
+    let customerRequest = "";
+    
+    if (cols.length > 3) {
+      const col4 = sanitizeCell(cols[3]);
+      const col5 = cols.length > 4 ? sanitizeCell(cols[4]) : "";
+      
+      // Check if col4 looks like a date (YYYY-MM-DD format or empty)
+      const isDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
+      
+      if (isDateLike) {
+        // Column 4 is a date (or empty), column 5 is customer request
+        startDateStr = col4;
+        customerRequest = col5;
+      } else {
+        // Column 4 is customer request, no start date provided
+        startDateStr = "";
+        customerRequest = col4;
+      }
+    }
+    
     if (!epic || !desc) continue;
     parsed.push({ id: "", epic, desc, hours, startDateStr, customerRequest });
   }
