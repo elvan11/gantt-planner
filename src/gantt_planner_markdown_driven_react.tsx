@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import VersionChecker from "./VersionChecker";
 
 /**
  * Gantt Planner – Markdown‑driven
@@ -189,11 +190,11 @@ export default function App() {
   }, [startDate, schedule.horizonDays, skipWeekends]);
 
   // -------------------- Drag to move --------------------
-  const dragState = useRef<null | {
+  const dragState = useRef(null as null | {
     id: string;
     startPixelX: number;
     initialStartIdx: number;
-  }>(null);
+  });
 
   // grid config
   const [cellWidth, setCellWidth] = useState(32); // px per day
@@ -345,7 +346,8 @@ export default function App() {
       className="min-h-screen w-full text-slate-900"
       style={{ background: "linear-gradient(120deg,#c1e2c6 0%,#c6d4ed 100%)" }}
     >
-      <div className="mx-auto max-w-[1800px] p-4 md:p-6 flex flex-col w-full">
+      <VersionChecker />
+      <div className="mx-auto max-w-[2000px] p-4 md:p-6 flex flex-col w-full">
         <div className="flex items-center gap-4 mt-2">
             <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-600">Rekonnect planner</h1>
           <p className="text-sm text-slate-600">
@@ -469,10 +471,10 @@ export default function App() {
             </div>
             {/* Header timeline */}
             <div className="sticky top-0 z-10 overflow-x-auto border-b border-slate-200">
-              <div className="min-w-[640px]" style={{ width: schedule.horizonDays * CELL_W }}>
+              <div className="min-w-[640px]" style={{ width: schedule.horizonDays * CELL_W + 400 }}>
                 <div className="grid" style={{ gridTemplateColumns: `250px 150px repeat(${schedule.horizonDays}, ${CELL_W}px)` }}>
-                  <div className="bg-white/80 backdrop-blur px-3 py-2 text-xs font-medium sticky left-0 z-20">Task</div>
-                  <div className="bg-white/80 backdrop-blur px-3 py-2 text-xs font-medium sticky left-[300px] z-20 border-l border-slate-200">Customer</div>
+                  <div className="bg-white px-3 py-2 text-xs font-medium sticky left-0 z-20 border-r border-slate-200">Task</div>
+                  <div className="bg-white px-3 py-2 text-xs font-medium sticky left-[250px] z-20 border-l border-slate-200 border-r border-slate-200">Customer</div>
                   {/* Month and day header */}
                   {(() => {
                     let lastMonth = null;
@@ -484,9 +486,9 @@ export default function App() {
                         showMonth = true;
                         lastMonth = month;
                       }
-                      const isMonday = d.getDay() === 1; // Monday starts the week
+                      const isMonday = d.getDay() === 1; // Monday starts a new week
                       return (
-                        <div key={i} className={`text-[10px] text-center py-1 border-r border-slate-200 ${isMonday ? 'border-r-slate-400 border-r-2' : ''} ${isWeekend(d) ? "bg-slate-100" : "bg-white"}`}>
+                        <div key={i} className={`text-[10px] text-center py-1 border-l border-slate-200 ${isMonday ? 'border-l-slate-400 border-l-2' : ''} border-r border-slate-200 ${isWeekend(d) ? "bg-slate-100" : "bg-white"}`}>
                           {showMonth ? (
                             <span className="font-semibold">{month}</span>
                           ) : null}
@@ -508,7 +510,7 @@ export default function App() {
                   const epicSummary = getEpicSummary(tasks);
                   
                   return (
-                    <React.Fragment key={epic}>
+                    <div key={epic}>
                       {/* Epic section header */}
                       <div className="bg-slate-50 relative" style={{ gridTemplateColumns: `250px 150px repeat(${schedule.horizonDays}, ${CELL_W}px)`, display: 'grid', height: ROW_H }}>
                         <div 
@@ -531,7 +533,7 @@ export default function App() {
                         {days.map((d, i) => {
                           const isMonday = d.getDay() === 1;
                           return (
-                            <div key={i} className={`bg-slate-50 border-b border-slate-300 border-r border-slate-200 ${isMonday ? 'border-r-slate-400 border-r-2' : ''}`}></div>
+                            <div key={i} className={`bg-slate-50 border-b border-slate-300 border-l border-slate-200 ${isMonday ? 'border-l-slate-400 border-l-2' : ''} border-r border-slate-200`}></div>
                           );
                         })}
                         
@@ -583,7 +585,7 @@ export default function App() {
                           {days.map((d, i) => {
                             const isMonday = d.getDay() === 1;
                             return (
-                              <div key={i} className={`h-full border-b border-slate-100 border-r border-slate-200 ${isMonday ? 'border-r-slate-400 border-r-2' : ''} ${isWeekend(d) ? "bg-slate-50" : "bg-white"}`}></div>
+                              <div key={i} className={`h-full border-b border-slate-100 border-l border-slate-200 ${isMonday ? 'border-l-slate-400 border-l-2' : ''} border-r border-slate-200 ${isWeekend(d) ? "bg-slate-50" : "bg-white"}`}></div>
                             );
                           })}
 
@@ -621,7 +623,7 @@ export default function App() {
                         </div>
                       );
                     })}
-                  </React.Fragment>
+                  </div>
                 );
                 })}
               </div>
