@@ -1,15 +1,15 @@
 {
   "files": {
     "main.css": "/gantt-planner/static/css/main.2db93456.css",
-    "main.js": "/gantt-planner/static/js/main.925145c8.js",
+    "main.js": "/gantt-planner/static/js/main.96733b79.js",
     "static/js/453.34c58521.chunk.js": "/gantt-planner/static/js/453.34c58521.chunk.js",
     "index.html": "/gantt-planner/index.html",
     "main.2db93456.css.map": "/gantt-planner/static/css/main.2db93456.css.map",
-    "main.925145c8.js.map": "/gantt-planner/static/js/main.925145c8.js.map",
+    "main.96733b79.js.map": "/gantt-planner/static/js/main.96733b79.js.map",
     "453.34c58521.chunk.js.map": "/gantt-planner/static/js/453.34c58521.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.2db93456.css",
-    "static/js/main.925145c8.js"
+    "static/js/main.96733b79.js"
   ]
 }
