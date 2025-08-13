@@ -619,6 +619,9 @@ export default function App() {
               <p>
                 Tip: Use integers for hours (e.g., <code>40</code>) or soft estimates like <code>~30h</code>. Add a fourth column for start dates (optional), a fifth column for customer requests, and a sixth column for algorithm inclusion (true/false). Speed=1 with 8h/day means one developer working full time.
               </p>
+              <p className="mt-2">
+                <strong>Include column:</strong> Use the checkboxes in the Include column to control which tasks are included in the Gantt chart's concurrency and scheduling calculations. Unchecking a box will exclude that task from the automatic calendar time calculation, but the task will still be shown in the chart.
+              </p>
             </div>
           </div>
         </div>
