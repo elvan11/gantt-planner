@@ -4,14 +4,14 @@ import VersionChecker from "./VersionChecker";
 /**
  * Gantt Planner – Markdown‑driven
  * -------------------------------------------------------------
- * Paste a Markdown table with columns: Epic | Task description | Estimated time in hours | Start date (optional) | Customer Request (optional)
+ * Paste a Markdown table with columns: Epic | Task description | Estimated time in hours | Start date (optional) | Customer Request (optional) | Include in Algorithm (optional)
  * Example:
- * | Epic | Task description | Estimated time in hours | Start date | Customer Request |
- * | --- | --- | --- | --- | --- |
- * | Onboarding | Improve registration form | 40 | 2025-08-15 | Ventinova |
- * | Onboarding | Open access toggle | 20 | | Ventinova |
- * | Products | Default product visibility | 0 | | Internal |
- * | Notifications | Review notifications | 30 | | Paxman |
+ * | Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm |
+ * | --- | --- | --- | --- | --- | --- |
+ * | Onboarding | Improve registration form | 40 | 2025-08-15 | Ventinova | true |
+ * | Onboarding | Open access toggle | 20 | | Ventinova | true |
+ * | Products | Default product visibility | 0 | | Internal | false |
+ * | Notifications | Review notifications | 30 | | Paxman | true |
  *
  * Features:
  * - Speed field (developers capacity). Default 1.0
@@ -33,14 +33,51 @@ export default function App() {
     return params.get(key);
   };
 
+  // Function to apply include flags from query parameters
+  const applyIncludeFlagsFromQuery = (markdown: string) => {
+    const params = new URLSearchParams(window.location.search);
+    const lines = markdown.split(/\r?\n/);
+    let taskIndex = 0;
+    
+    const updatedLines = lines.map(line => {
+      if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
+        return line;
+      }
+      
+      const cols = line.split('|').map(c => c.trim());
+      if (cols.length < 3) return line; // Skip lines that don't have enough columns
+      
+      const includeParam = params.get(`task${taskIndex}_include`);
+      if (includeParam !== null) {
+        // Ensure we have enough columns
+        while (cols.length < 7) {
+          cols.push(' ');
+        }
+        
+        // Update the include flag column (6th column, index 6)
+        cols[6] = ` ${includeParam} `;
+        taskIndex++;
+        
+        return cols.join('|');
+      }
+      
+      taskIndex++;
+      return line;
+    });
+    
+    return updatedLines.join('\n');
+  };
+
   // Load markdown from query param, localStorage, or default
-  const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request |\n| --- | --- | ---: | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova |\n| Products | Default product visibility for all | 0 | | Ventinova |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova |`;
+  const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm |\n| --- | --- | ---: | --- | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova | true |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova | true |\n| Products | Default product visibility for all | 0 | | Ventinova | true |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova | true |`;
   const [markdown, setMarkdown] = useState(() => {
     const qp = getQueryParam('mdTable');
     if (qp) {
-      const decodedMarkdown = decodeURIComponent(qp);
+      let decodedMarkdown = decodeURIComponent(qp);
       // If it doesn't have headers, add them
-      return ensureMarkdownHeaders(decodedMarkdown);
+      decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
+      // Apply include flags from query parameters
+      return applyIncludeFlagsFromQuery(decodedMarkdown);
     }
     try {
       const cached = localStorage.getItem('ganttMarkdownTable');
@@ -123,6 +160,15 @@ export default function App() {
   // Assign stable IDs based on hash of row content to preserve position on small edits
   const tasksWithIds = useMemo(() => tasks.map((t) => ({ ...t, id: hashId(`${t.epic}|${t.desc}|${t.hours}`) })), [tasks]);
 
+  // Function to extract include flags as query parameters
+  const getIncludeFlags = useMemo(() => {
+    const flags: Record<string, boolean> = {};
+    tasksWithIds.forEach((task, index) => {
+      flags[`task${index}_include`] = task.includeInAlgorithm;
+    });
+    return flags;
+  }, [tasksWithIds]);
+
   // Group tasks by Epic, preserving order within each Epic
   const epicGroups = useMemo(() => {
     const groups = {};
@@ -172,24 +218,42 @@ export default function App() {
     };
   };
 
-  // Start index per task (working-day index from project start). Initialize sequentially once per parse
+  // Start index per task (working-day index from project start). Initialize from markdown start dates if present
   const [starts, setStarts] = useState({});
+
+  // Helper: find day index for a given ISO date string
+  function findDayIndexForDate(isoDate, daysArr) {
+    if (!isoDate || !/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return null;
+    for (let i = 0; i < daysArr.length; ++i) {
+      if (daysArr[i].toISOString().slice(0, 10) === isoDate) return i;
+    }
+    return null;
+  }
+
+  // Effect: whenever markdown, tasks, or startDate changes, update starts from markdown start dates
   useEffect(() => {
-    // If tasks changed (by id set), fill missing starts sequentially
-    const current = { ...starts };
+    // Build working days array for mapping dates to indices
+    const daysArr = buildWorkingDays({ startISO: startDate, count: 730, skipWeekends });
+    const newStarts = {};
     let cursor = 0;
     for (const t of tasksWithIds) {
-      if (!(t.id in current)) {
-        current[t.id] = cursor; // sequential initial packing
-        // naive initial duration (no concurrency): days = ceil(hours / (speed*hoursPerDay))
+      let idx: number | null = null;
+      if (t.startDateStr && /^\d{4}-\d{2}-\d{2}$/.test(t.startDateStr)) {
+        idx = findDayIndexForDate(t.startDateStr, daysArr);
+      }
+      if (typeof idx === 'number' && idx >= 0) {
+        newStarts[t.id] = idx;
+      } else {
+        // fallback: sequential packing if no date
+        newStarts[t.id] = cursor;
         const cap = Math.max(1e-6, speed * hoursPerDay);
         const d = Math.max(1, Math.ceil(t.hours / cap));
         cursor += d;
       }
     }
-    setStarts(current);
+    setStarts(newStarts);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasksWithIds.length]);
+  }, [markdown, tasksWithIds.length, startDate, skipWeekends, speed, hoursPerDay]);
 
   // -------------------- Scheduling Engine --------------------
   const schedule = useMemo(() => {
@@ -221,6 +285,10 @@ export default function App() {
   const CELL_W = cellWidth;
   const ROW_H = 66; // Increased from 36 to allow text wrapping
 
+  // Show/hide Customer and Include columns
+  const [showCustomer, setShowCustomer] = useState(true);
+  const [showInclude, setShowInclude] = useState(true);
+
   const onBarPointerDown = (e, id) => {
     e.target.setPointerCapture(e.pointerId);
     dragState.current = {
@@ -246,6 +314,42 @@ export default function App() {
     updateMarkdownStartDates();
     
     dragState.current = null;
+  };
+
+  // Function to update the include flag for a task
+  const updateTaskIncludeFlag = (taskId: string, includeFlag: boolean) => {
+    const task = tasksWithIds.find(t => t.id === taskId);
+    if (!task) return;
+    
+    const lines = markdown.split(/\r?\n/);
+    const updatedLines = lines.map(line => {
+      if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
+        return line;
+      }
+      
+      const cols = line.split('|').map(c => c.trim());
+      if (cols.length < 4) return line; // Skip lines that don't have enough columns
+      
+      const epic = sanitizeCell(cols[1]);
+      const desc = sanitizeCell(cols[2]);
+      
+      // Find matching task
+      if (epic === task.epic && desc === task.desc) {
+        // Ensure we have enough columns
+        while (cols.length < 7) {
+          cols.push(' ');
+        }
+        
+        // Update the include flag column (6th column, index 6)
+        cols[6] = ` ${includeFlag} `;
+        
+        return cols.join('|');
+      }
+      
+      return line;
+    });
+    
+    setMarkdown(updatedLines.join('\n'));
   };
 
   // Function to update the markdown table with calculated start dates
@@ -283,7 +387,7 @@ export default function App() {
         const isCurrentlyDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
         
         if (isCurrentlyDateLike || cols.length >= 6) {
-          // Current structure: Epic | Task | Hours | Date | Customer
+          // Current structure: Epic | Task | Hours | Date | Customer | Include
           // Update the fourth column (start date)
           cols[4] = ` ${startDateStr} `;
           
@@ -291,12 +395,18 @@ export default function App() {
           if (cols.length < 6) {
             cols[5] = ' '; // Add empty customer request column if missing
           }
+          
+          // Ensure we preserve the sixth column (include flag) if it exists
+          if (cols.length < 7) {
+            cols[6] = ' true '; // Add default include flag if missing
+          }
         } else {
           // Current structure: Epic | Task | Hours | Customer (no date column)
           // We need to insert a date column
           const customerRequest = cols[4] || '';
           cols[4] = ` ${startDateStr} `;
           cols[5] = ` ${customerRequest} `;
+          cols[6] = ' true '; // Add default include flag
         }
       }
       
@@ -323,7 +433,7 @@ export default function App() {
       const isCurrentlyDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
       
       if (isCurrentlyDateLike || cols.length >= 6) {
-        // Current structure: Epic | Task | Hours | Date | Customer
+        // Current structure: Epic | Task | Hours | Date | Customer | Include
         // Clear the fourth column (start date) but preserve structure
         cols[4] = ' '; // Empty start date
         
@@ -331,12 +441,18 @@ export default function App() {
         if (cols.length < 6) {
           cols[5] = ' '; // Add empty customer request column if missing
         }
+        
+        // Ensure we preserve the sixth column (include flag) if it exists
+        if (cols.length < 7) {
+          cols[6] = ' true '; // Add default include flag if missing
+        }
       } else {
         // Current structure: Epic | Task | Hours | Customer (no date column)
         // We need to insert an empty date column and move customer to col5
         const customerRequest = cols[4] || '';
         cols[4] = ' '; // Empty start date
         cols[5] = ` ${customerRequest} `;
+        cols[6] = ' true '; // Add default include flag
       }
       
       return cols.join('|');
@@ -370,7 +486,7 @@ export default function App() {
       <div className="mx-auto max-w-[2000px] p-4 md:p-6 flex flex-col w-full">
         <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-600">Rekonnect planner</h1>
       <p className="text-sm text-slate-600">
-        Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date | Customer Request). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
+        Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
       </p>
 
   {/* Editor/Settings Section */}
@@ -385,13 +501,15 @@ export default function App() {
                 title="Open shareable URL with current form data"
                 onClick={() => {
                   const dataOnlyMarkdown = extractDataRows(markdown);
+                  const includeFlags = getIncludeFlags;
                   const params = new URLSearchParams({
                     mdTable: encodeURIComponent(dataOnlyMarkdown),
                     speed: String(speed),
                     hoursPerDay: String(hoursPerDay),
                     startDate: String(startDate),
                     skipWeekends: String(skipWeekends),
-                    customerFilter: String(customerFilter)
+                    customerFilter: String(customerFilter),
+                    ...Object.fromEntries(Object.entries(includeFlags).map(([key, value]) => [key, String(value)]))
                   });
                   window.open(`${window.location.pathname}?${params.toString()}`, '_blank');
                 }}
@@ -445,7 +563,7 @@ export default function App() {
                   type="checkbox"
                   checked={skipWeekends}
                   onChange={(e) => setSkipWeekends(e.target.checked)}
-                  className="h-4 w-4"
+                  className="h-4 w-4 border-blue-200 text-blue-400 focus:ring-blue-300"
                 />
                 <label htmlFor="skipW" className="text-sm">Skip weekends</label>
               </div>
@@ -484,20 +602,22 @@ export default function App() {
             {/* Continuously update URL in address bar as form changes */}
             {React.useEffect(() => {
               const dataOnlyMarkdown = extractDataRows(markdown);
+              const includeFlags = getIncludeFlags;
               const params = new URLSearchParams({
                 mdTable: encodeURIComponent(dataOnlyMarkdown),
                 speed: String(speed),
                 hoursPerDay: String(hoursPerDay),
                 startDate: String(startDate),
                 skipWeekends: String(skipWeekends),
-                customerFilter: String(customerFilter)
+                customerFilter: String(customerFilter),
+                ...Object.fromEntries(Object.entries(includeFlags).map(([key, value]) => [key, String(value)]))
               });
               window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
-            }, [markdown, speed, hoursPerDay, startDate, skipWeekends, customerFilter])}
+            }, [markdown, speed, hoursPerDay, startDate, skipWeekends, customerFilter, getIncludeFlags])}
 
             <div className="mt-3 text-xs text-slate-500">
               <p>
-                Tip: Use integers for hours (e.g., <code>40</code>) or soft estimates like <code>~30h</code>. Add a fourth column for start dates (optional) and a fifth column for customer requests. Speed=1 with 8h/day means one developer working full time.
+                Tip: Use integers for hours (e.g., <code>40</code>) or soft estimates like <code>~30h</code>. Add a fourth column for start dates (optional), a fifth column for customer requests, and a sixth column for algorithm inclusion (true/false). Speed=1 with 8h/day means one developer working full time.
               </p>
             </div>
           </div>
@@ -506,66 +626,92 @@ export default function App() {
         {/* Gantt Chart Section */}
         <div className="mt-6 w-full">
           <div className="rounded-2xl bg-white shadow overflow-hidden w-full">
-            {/* Chart Zoom Controls */}
-            <div className="flex gap-2 items-center px-4 py-2 border-b border-slate-100 bg-slate-50">
-              <span className="text-xs text-slate-600">Zoom:</span>
-              <button
-                className="px-2 py-1 rounded bg-slate-200 hover:bg-slate-300 text-xs font-medium"
-                onClick={() => setCellWidth((w) => Math.min(64, w + 8))}
-                title="Zoom in"
-              >+
-              </button>
-              <button
-                className="px-2 py-1 rounded bg-slate-200 hover:bg-slate-300 text-xs font-medium"
-                onClick={() => setCellWidth((w) => Math.max(12, w - 8))}
-                title="Zoom out"
-              >−
-              </button>
-            </div>
-            {/* Header timeline */}
-            <div className="sticky top-0 z-10 overflow-x-auto border-b border-slate-200">
-              <div className="min-w-[640px]" style={{ width: schedule.horizonDays * CELL_W + 400 }}>
-                <div className="grid" style={{ gridTemplateColumns: `250px 150px repeat(${schedule.horizonDays}, ${CELL_W}px)` }}>
-                  <div className="bg-white px-3 py-2 text-xs font-medium sticky left-0 z-20 border-r border-slate-200">Task</div>
-                  <div className="bg-white px-3 py-2 text-xs font-medium sticky left-[250px] z-20 border-l border-slate-200 border-r border-slate-200">Customer</div>
-                  {/* Month and day header */}
-                  {(() => {
-                    let lastMonth = null;
-                    return days.map((d, i) => {
-                      const month = d.toLocaleDateString(undefined, { month: "short" });
-                      const day = d.getDate();
-                      let showMonth = false;
-                      if (lastMonth !== month) {
-                        showMonth = true;
-                        lastMonth = month;
-                      }
-                      const isMonday = d.getDay() === 1; // Monday starts a new week
-                      return (
-                        <div key={i} className={`text-[10px] text-center py-1 border-l border-slate-200 ${isMonday ? 'border-l-slate-400 border-l-2' : ''} border-r border-slate-200 ${isWeekend(d) ? "bg-slate-100" : "bg-white"}`}>
-                          {showMonth ? (
-                            <span className="font-semibold">{month}</span>
-                          ) : null}
-                          <div>{day}</div>
-                        </div>
-                      );
-                    });
-                  })()}
-                </div>
+            {/* Chart Zoom Controls and Customer column toggle */}
+            <div className="flex gap-4 items-center px-4 py-2 border-b border-slate-100 bg-slate-50">
+              <div className="flex gap-2 items-center">
+                <span className="text-xs text-slate-600">Zoom:</span>
+                <button
+                  className="px-2 py-1 rounded bg-slate-200 hover:bg-slate-300 text-xs font-medium"
+                  onClick={() => setCellWidth((w) => Math.min(64, w + 8))}
+                  title="Zoom in"
+                >+
+                </button>
+                <button
+                  className="px-2 py-1 rounded bg-slate-200 hover:bg-slate-300 text-xs font-medium"
+                  onClick={() => setCellWidth((w) => Math.max(12, w - 8))}
+                  title="Zoom out"
+                >−
+                </button>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="showCustomerCol"
+                  type="checkbox"
+                  checked={showCustomer}
+                  onChange={e => setShowCustomer(e.target.checked)}
+                  className="h-4 w-4 border-blue-200 text-blue-400 focus:ring-blue-300"
+                />
+                <label htmlFor="showCustomerCol" className="text-xs text-slate-600 select-none">Show Customer column</label>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="showIncludeCol"
+                  type="checkbox"
+                  checked={showInclude}
+                  onChange={e => setShowInclude(e.target.checked)}
+                  className="h-4 w-4 border-blue-200 text-blue-400 focus:ring-blue-300"
+                />
+                <label htmlFor="showIncludeCol" className="text-xs text-slate-600 select-none">Show Include column</label>
               </div>
             </div>
 
-            {/* Body */}
+            {/* Scrollable container for both header and body */}
             <div className="overflow-x-auto">
-              <div className="min-w-[640px]" style={{ width: schedule.horizonDays * CELL_W }}>
-                {/* Rows grouped by Epic */}
+              <div className="min-w-[640px]" style={{ width: schedule.horizonDays * CELL_W + (showCustomer ? (showInclude ? 462 : 400) : (showInclude ? 312 : 250)) }}>
+                {/* Header timeline */}
+                <div className="border-b border-slate-200">
+                  <div className="grid" style={{ gridTemplateColumns: `250px${showCustomer ? ' 150px' : ''}${showInclude ? ' 62px' : ''} repeat(${schedule.horizonDays}, ${CELL_W}px)` }}>
+                    <div className="bg-white px-3 py-2 text-xs font-medium sticky left-0 z-20 border-r border-slate-200">Task</div>
+                    {showCustomer && (
+                      <div className="bg-white px-3 py-2 text-xs font-medium sticky left-[250px] z-20 border-l border-slate-200 border-r border-slate-200">Customer</div>
+                    )}
+                    {showInclude && (
+                      <div className={`bg-white px-3 py-2 text-xs font-medium sticky ${showCustomer ? 'left-[400px]' : 'left-[250px]'} z-20 border-l border-slate-200 border-r border-slate-200`}>Include</div>
+                    )}
+                    {/* Month and day header */}
+                    {(() => {
+                      let lastMonth = null;
+                      return days.map((d, i) => {
+                        const month = d.toLocaleDateString(undefined, { month: "short" });
+                        const day = d.getDate();
+                        let showMonth = false;
+                        if (lastMonth !== month) {
+                          showMonth = true;
+                          lastMonth = month;
+                        }
+                        const isMonday = d.getDay() === 1; // Monday starts a new week
+                        return (
+                          <div key={i} className={`text-[10px] text-center py-1 border-l border-slate-200 ${isMonday ? 'border-l-slate-400 border-l-2' : ''} border-r border-slate-200 ${isWeekend(d) ? "bg-slate-100" : "bg-white"}`}>
+                            {showMonth ? (
+                              <span className="font-semibold">{month}</span>
+                            ) : null}
+                            <div>{day}</div>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+
+                {/* Body - Rows grouped by Epic */}
                 {Object.entries(epicGroups).map(([epic, tasks]) => {
                   const isFolded = foldedEpics.has(epic);
                   const epicSummary = getEpicSummary(tasks);
-                  
+                  const gridCols = `250px${showCustomer ? ' 150px' : ''}${showInclude ? ' 62px' : ''} repeat(${schedule.horizonDays}, ${CELL_W}px)`;
                   return (
                     <div key={epic}>
                       {/* Epic section header */}
-                      <div className="bg-slate-50 relative" style={{ gridTemplateColumns: `250px 150px repeat(${schedule.horizonDays}, ${CELL_W}px)`, display: 'grid', height: ROW_H }}>
+                      <div className="bg-slate-50 relative" style={{ gridTemplateColumns: gridCols, display: 'grid', height: ROW_H }}>
                         <div 
                           className="sticky left-0 z-10 flex items-center gap-2 pl-4 pr-3 h-full font-semibold text-slate-800 text-sm bg-slate-50 border-r border-slate-300 border-b border-slate-300 cursor-pointer hover:bg-slate-100"
                           onClick={() => toggleEpicFold(epic)}
@@ -579,9 +725,14 @@ export default function App() {
                           </svg>
                           <span className="h-3 w-3 rounded-full" style={{ backgroundColor: colorForEpic(epic) }} />
                           <span>{epic}</span>
-                          <span className="text-xs font-normal text-slate-600 ml-2">({(tasks as Task[]).length} tasks)</span>
+                          <span className="text-xs font-normal text-slate-600 ml-2">{(tasks as Task[]).length} tasks</span>
                         </div>
-                        <div className="sticky left-[250px] z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300"></div>
+                        {showCustomer && (
+                          <div className="sticky left-[250px] z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300"></div>
+                        )}
+                        {showInclude && (
+                          <div className={`sticky ${showCustomer ? 'left-[400px]' : 'left-[250px]'} z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300`}></div>
+                        )}
                         {/* Empty cells for timeline */}
                         {days.map((d, i) => {
                           const isMonday = d.getDay() === 1;
@@ -595,7 +746,7 @@ export default function App() {
                           <div
                             className="absolute rounded-xl shadow-sm border border-black/10 flex items-center"
                             style={{
-                              left: 400 + Math.max(0, epicSummary.start) * CELL_W,
+                              left: (showCustomer ? 400 : 250) + Math.max(0, epicSummary.start) * CELL_W,
                               top: Math.floor((ROW_H - 20) / 2),
                               height: 20,
                               width: epicSummary.duration * CELL_W,
@@ -612,72 +763,87 @@ export default function App() {
                       
                       {/* Tasks for this Epic - only show if not folded */}
                       {!isFolded && (tasks as Task[]).map((t) => {
-                      const row = schedule.rows[t.id];
-                      const color = colorForEpic(t.epic);
-                      return (
-                        <div key={t.id} className="relative grid items-start" style={{ gridTemplateColumns: `250px 150px repeat(${schedule.horizonDays}, ${CELL_W}px)`, height: ROW_H }}>
-                          {/* Frozen first column with task label */}
-                          <div className="sticky left-0 z-10 bg-white flex items-start gap-3 px-4 py-2 h-full border-b border-slate-100 border-r border-slate-200">
-                            <div className="h-3 w-3 rounded-full flex-shrink-0 mt-0.5" style={{ backgroundColor: color }} />
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm leading-tight break-words whitespace-normal text-slate-800" style={{ wordBreak: 'break-word' }} title={`${t.desc}`}>{t.desc}</div>
-                              <div className="text-xs text-slate-500 mt-0.5">{t.epic} • {t.hours}h</div>
+                        const row = schedule.rows[t.id];
+                        const color = colorForEpic(t.epic);
+                        return (
+                          <div key={t.id} className="relative grid items-start" style={{ gridTemplateColumns: gridCols, height: ROW_H }}>
+                            {/* Frozen first column with task label */}
+                            <div className="sticky left-0 z-10 bg-white flex items-start gap-3 px-4 py-2 h-full border-b border-slate-100 border-r border-slate-200">
+                              <div className="h-3 w-3 rounded-full flex-shrink-0 mt-0.5" style={{ backgroundColor: color }} />
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm leading-tight break-words whitespace-normal text-slate-800" style={{ wordBreak: 'break-word' }} title={`${t.desc}`}>{t.desc}</div>
+                                <div className="text-xs text-slate-500 mt-0.5">{t.epic} • {t.hours}h</div>
+                              </div>
                             </div>
-                          </div>
 
-                          {/* Frozen second column with customer request */}
-                          <div className="sticky left-[250px] z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200">
-                            {t.customerRequest && (
-                              <span className="inline-block px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full border border-blue-200">
-                                {t.customerRequest}
-                              </span>
+                            {/* Frozen second column with customer request */}
+                            {showCustomer && (
+                              <div className="sticky left-[250px] z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200">
+                                {t.customerRequest && (
+                                  <span className="inline-block px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full border border-blue-200">
+                                    {t.customerRequest}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Frozen third column with include checkbox */}
+                            {showInclude && (
+                              <div className={`sticky ${showCustomer ? 'left-[400px]' : 'left-[250px]'} z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200`}>
+                                <input
+                                  type="checkbox"
+                                  checked={t.includeInAlgorithm}
+                                  onChange={(e) => updateTaskIncludeFlag(t.id, e.target.checked)}
+                                  className="h-4 w-4 rounded border-blue-200 text-blue-400 focus:ring-blue-300"
+                                  title="Include this task in the algorithm for calculating calendar time"
+                                />
+                              </div>
+                            )}
+
+                            {/* Grid cells background */}
+                            {days.map((d, i) => {
+                              const isMonday = d.getDay() === 1;
+                              return (
+                                <div key={i} className={`h-full border-b border-slate-100 border-l border-slate-200 ${isMonday ? 'border-l-slate-400 border-l-2' : ''} border-r border-slate-200 ${isWeekend(d) ? "bg-slate-50" : "bg-white"}`}></div>
+                              );
+                            })}
+
+                            {/* Bar */}
+                            {row && row.start + row.durationDays > 0 && (
+                              <div
+                                className="absolute rounded-2xl shadow-md border border-black/5 cursor-grab active:cursor-grabbing select-none flex items-center"
+                                onPointerDown={(e) => onBarPointerDown(e, t.id)}
+                                onPointerMove={onBarPointerMove}
+                                onPointerUp={onBarPointerUp}
+                                style={{
+                                  left: (showCustomer ? 400 : 250) + Math.max(0, row.start) * CELL_W,
+                                  top: Math.floor((ROW_H - 28) / 2), // Center the 28px bar in the taller row
+                                  height: 28, // Fixed bar height regardless of row height
+                                  width: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W,
+                                  backgroundColor: color,
+                                }}
+                                title={`${t.desc}\n${t.epic}\n${t.hours}h • ${row.durationDays}d\n${row.start < 0 ? 'Starts before project start' : formatShortDate(days[row.start])} → ${formatShortDate(days[Math.min(days.length - 1, Math.max(0, row.start) + Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) - 1)])}`}
+                              >
+                                  <span
+                                    className={`text-xs font-medium text-white drop-shadow-sm ${Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W < 40 ? 'ml-1' : 'ml-3'}`}
+                                    style={{
+                                      marginLeft: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W < 40 ? 4 : 12,
+                                      width: '100%',
+                                      textAlign: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W < 40 ? 'center' : 'left',
+                                      whiteSpace: 'nowrap',
+                                      overflow: 'hidden',
+                                      textOverflow: 'ellipsis',
+                                    }}
+                                  >
+                                    {row.durationDays}d
+                                  </span>
+                              </div>
                             )}
                           </div>
-
-                          {/* Grid cells background */}
-                          {days.map((d, i) => {
-                            const isMonday = d.getDay() === 1;
-                            return (
-                              <div key={i} className={`h-full border-b border-slate-100 border-l border-slate-200 ${isMonday ? 'border-l-slate-400 border-l-2' : ''} border-r border-slate-200 ${isWeekend(d) ? "bg-slate-50" : "bg-white"}`}></div>
-                            );
-                          })}
-
-                          {/* Bar */}
-                          {row && row.start + row.durationDays > 0 && (
-                            <div
-                              className="absolute rounded-2xl shadow-md border border-black/5 cursor-grab active:cursor-grabbing select-none flex items-center"
-                              onPointerDown={(e) => onBarPointerDown(e, t.id)}
-                              onPointerMove={onBarPointerMove}
-                              onPointerUp={onBarPointerUp}
-                              style={{
-                                left: 400 + Math.max(0, row.start) * CELL_W,
-                                top: Math.floor((ROW_H - 28) / 2), // Center the 28px bar in the taller row
-                                height: 28, // Fixed bar height regardless of row height
-                                width: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W,
-                                backgroundColor: color,
-                              }}
-                              title={`${t.desc}\n${t.epic}\n${t.hours}h • ${row.durationDays}d\n${row.start < 0 ? 'Starts before project start' : formatShortDate(days[row.start])} → ${formatShortDate(days[Math.min(days.length - 1, Math.max(0, row.start) + Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) - 1)])}`}
-                            >
-                                <span
-                                  className={`text-xs font-medium text-white drop-shadow-sm ${Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W < 40 ? 'ml-1' : 'ml-3'}`}
-                                  style={{
-                                    marginLeft: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W < 40 ? 4 : 12,
-                                    width: '100%',
-                                    textAlign: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W < 40 ? 'center' : 'left',
-                                    whiteSpace: 'nowrap',
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                  }}
-                                >
-                                  {row.durationDays}d
-                                </span>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
+                        );
+                      })}
+                    </div>
+                  );
                 })}
               </div>
             </div>
@@ -734,6 +900,7 @@ interface Task {
   hours: number; // estimated hours
   startDateStr?: string; // optional start date from markdown
   customerRequest?: string; // optional customer request from markdown
+  includeInAlgorithm: boolean; // whether to include in concurrency algorithm
 }
 
 interface ScheduleResult {
@@ -766,14 +933,21 @@ function computeSchedule({
   const worstDays = Math.ceil((sumHours * N) / perDayCap) + 14; // + buffer
   const maxHorizon = clamp(worstDays, 14, 730);
 
-  // Initialize durations with no concurrency
+  // Initialize durations
   const durations = new Map<string, number>();
   for (const t of tasks) {
-    const d0 = Math.max(1, Math.ceil(t.hours / perDayCap));
-    durations.set(t.id, d0);
+    if (t.includeInAlgorithm) {
+      // For tasks included in algorithm, start with no concurrency estimate
+      const d0 = Math.max(1, Math.ceil(t.hours / perDayCap));
+      durations.set(t.id, d0);
+    } else {
+      // For tasks not included in algorithm, duration is fixed based on estimated hours
+      const fixedDuration = Math.max(1, Math.ceil(t.hours / perDayCap));
+      durations.set(t.id, fixedDuration);
+    }
   }
 
-  // Iterative refinement
+  // Iterative refinement (only for tasks included in algorithm)
   let H = maxHorizon;
   let concurrency = new Int16Array(H);
   let changed = true;
@@ -785,15 +959,19 @@ function computeSchedule({
     // Reset concurrency
     concurrency.fill(0);
 
-    // Tally current occupancy
+    // Tally current occupancy (only count tasks included in algorithm)
     for (const t of tasks) {
+      if (!t.includeInAlgorithm) continue; // Skip tasks not included in algorithm
+      
       const start = Math.min(H - 1, starts[t.id] ?? 0); // Allow negative starts
       const dur = clamp(durations.get(t.id) ?? 1, 1, H - Math.max(0, start));
       for (let d = Math.max(0, start); d < Math.max(0, start) + dur && d < H; d++) concurrency[d]++;
     }
 
-    // Recompute each task duration by simulating its daily progress under concurrency
+    // Recompute durations only for tasks included in algorithm
     for (const t of tasks) {
+      if (!t.includeInAlgorithm) continue; // Skip tasks not included in algorithm
+      
       const start = Math.min(H - 1, starts[t.id] ?? 0); // Allow negative starts
       let remaining = t.hours;
       let day = Math.max(0, start); // Start counting from day 0 if start is negative
@@ -862,27 +1040,60 @@ function parseMarkdownTable(md: string): Task[] {
     
     let startDateStr = "";
     let customerRequest = "";
+    let includeInAlgorithm = true; // Default to true
     
     if (cols.length > 3) {
       const col4 = sanitizeCell(cols[3]);
       const col5 = cols.length > 4 ? sanitizeCell(cols[4]) : "";
+      const col6 = cols.length > 5 ? sanitizeCell(cols[5]) : "";
       
       // Check if col4 looks like a date (YYYY-MM-DD format or empty)
       const isDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
       
       if (isDateLike) {
-        // Column 4 is a date (or empty), column 5 is customer request
+        // Column 4 is a date (or empty), column 5 is customer request, column 6 is include flag
         startDateStr = col4;
         customerRequest = col5;
+        if (col6) {
+          includeInAlgorithm = parseBooleanSafe(col6, true);
+        }
       } else {
-        // Column 4 is customer request, no start date provided
-        startDateStr = "";
-        customerRequest = col4;
+        // Check if we have the old format without date column
+        if (cols.length === 4) {
+          // Column 4 is customer request, no date or include flag
+          startDateStr = "";
+          customerRequest = col4;
+          includeInAlgorithm = true;
+        } else if (cols.length === 5) {
+          // Could be: Epic | Task | Hours | Customer | Include
+          // or: Epic | Task | Hours | Date | Customer (old format)
+          const isBooleanLike = /^(true|false|yes|no|1|0)$/i.test(col5);
+          if (isBooleanLike) {
+            // Epic | Task | Hours | Customer | Include
+            startDateStr = "";
+            customerRequest = col4;
+            includeInAlgorithm = parseBooleanSafe(col5, true);
+          } else {
+            // Epic | Task | Hours | Date | Customer (old format)
+            startDateStr = col4;
+            customerRequest = col5;
+            includeInAlgorithm = true;
+          }
+        } else {
+          // cols.length >= 6, assume: Epic | Task | Hours | Customer | Date | Include
+          // or Epic | Task | Hours | Date | Customer | Include
+          const col6 = cols.length > 5 ? sanitizeCell(cols[5]) : "";
+          startDateStr = "";
+          customerRequest = col4;
+          if (col6) {
+            includeInAlgorithm = parseBooleanSafe(col6, true);
+          }
+        }
       }
     }
     
     if (!epic || !desc) continue;
-    parsed.push({ id: "", epic, desc, hours, startDateStr, customerRequest });
+    parsed.push({ id: "", epic, desc, hours, startDateStr, customerRequest, includeInAlgorithm });
   }
   return parsed;
 }
@@ -935,8 +1146,8 @@ function ensureMarkdownHeaders(md: string): string {
   }
 
   // Add headers to the beginning
-  const header = "| Epic | Task description | Estimated time in hours | Start date | Customer Request |";
-  const separator = "| --- | --- | ---: | --- | --- |";
+  const header = "| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm |";
+  const separator = "| --- | --- | ---: | --- | --- | --- |";
   
   return `${header}\n${separator}\n${md}`;
 }
@@ -992,6 +1203,13 @@ function clamp(v: number, lo: number, hi: number) {
 function parseFloatSafe(v: string, def: number) {
   const n = parseFloat(v);
   return Number.isFinite(n) ? n : def;
+}
+
+function parseBooleanSafe(v: string, def: boolean): boolean {
+  const trimmed = v.toLowerCase().trim();
+  if (trimmed === "true" || trimmed === "yes" || trimmed === "1") return true;
+  if (trimmed === "false" || trimmed === "no" || trimmed === "0") return false;
+  return def;
 }
 
 function hashId(s: string): string {
