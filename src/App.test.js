@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders learn react link', () => {
+test('renders planner heading and today marker toggle', () => {
   render(<App />);
-  const linkElement = screen.getByText(/learn react/i);
-  expect(linkElement).toBeInTheDocument();
+  expect(screen.getByText(/Rekonnect planner/i)).toBeInTheDocument();
+  expect(screen.getByLabelText(/Show Today marker/i)).toBeInTheDocument();
 });

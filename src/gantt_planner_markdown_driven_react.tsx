@@ -115,6 +115,7 @@ export default function App() {
   const [speed, setSpeed] = useState(() => getCachedOrQuery('ganttSpeed', 1.0, 'speed'));
   const [hoursPerDay, setHoursPerDay] = useState(() => getCachedOrQuery('ganttHoursPerDay', 8, 'hoursPerDay'));
   const todayISO = new Date().toISOString().slice(0, 10);
+  const todayDate = useMemo(() => isoToLocalDate(todayISO), [todayISO]);
   const [startDate, setStartDate] = useState(() => getCachedOrQuery('ganttStartDate', todayISO, 'startDate'));
   const [skipWeekends, setSkipWeekends] = useState(() => getCachedOrQuery('ganttSkipWeekends', true, 'skipWeekends'));
   // Filter and folding state
@@ -284,10 +285,48 @@ export default function App() {
   const [cellWidth, setCellWidth] = useState(32); // px per day
   const CELL_W = cellWidth;
   const ROW_H = 66; // Increased from 36 to allow text wrapping
+  const TIMELINE_TOP_PADDING = 24;
 
   // Show/hide Customer and Include columns
   const [showCustomer, setShowCustomer] = useState(true);
   const [showInclude, setShowInclude] = useState(true);
+  const [showTodayMarker, setShowTodayMarker] = useState(true);
+
+  const timelineStaticOffset = 250 + (showCustomer ? 150 : 0) + (showInclude ? 62 : 0);
+
+  const todayMarker = useMemo(() => {
+    if (!days.length) return null;
+
+    const timelineStart = timelineStaticOffset;
+    const todayTime = todayDate.getTime();
+
+    let index = days.findIndex((d) => d.toISOString().slice(0, 10) === todayISO);
+
+    if (index === -1) {
+      for (let i = days.length - 1; i >= 0; i--) {
+        if (days[i].getTime() <= todayTime) {
+          index = i;
+          break;
+        }
+      }
+
+      if (index === -1) {
+        for (let i = 0; i < days.length; i++) {
+          if (days[i].getTime() >= todayTime) {
+            index = i;
+            break;
+          }
+        }
+      }
+    }
+
+    if (index === -1) return null;
+
+    return {
+      left: timelineStart + index * CELL_W,
+      label: formatShortDate(todayDate),
+    };
+  }, [days, timelineStaticOffset, CELL_W, todayDate, todayISO]);
 
   const onBarPointerDown = (e, id) => {
     e.target.setPointerCapture(e.pointerId);
@@ -630,7 +669,7 @@ export default function App() {
         <div className="mt-6 w-full">
           <div className="rounded-2xl bg-white shadow overflow-hidden w-full">
             {/* Chart Zoom Controls and Customer column toggle */}
-            <div className="flex gap-4 items-center px-4 py-2 border-b border-slate-100 bg-slate-50">
+            <div className="flex flex-wrap gap-4 items-center px-4 py-2 border-b border-slate-100 bg-slate-50">
               <div className="flex gap-2 items-center">
                 <span className="text-xs text-slate-600">Zoom:</span>
                 <button
@@ -666,11 +705,33 @@ export default function App() {
                 />
                 <label htmlFor="showIncludeCol" className="text-xs text-slate-600 select-none">Show Include column</label>
               </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id="showTodayMarker"
+                  type="checkbox"
+                  checked={showTodayMarker}
+                  onChange={e => setShowTodayMarker(e.target.checked)}
+                  className="h-4 w-4 border-blue-200 text-blue-400 focus:ring-blue-300"
+                />
+                <label htmlFor="showTodayMarker" className="text-xs text-slate-600 select-none">Show Today marker</label>
+              </div>
             </div>
 
             {/* Scrollable container for both header and body */}
             <div className="overflow-x-auto">
-              <div className="min-w-[640px]" style={{ width: schedule.horizonDays * CELL_W + (showCustomer ? (showInclude ? 462 : 400) : (showInclude ? 312 : 250)) }}>
+              <div className="relative min-w-[640px]" style={{ width: schedule.horizonDays * CELL_W + timelineStaticOffset, paddingTop: TIMELINE_TOP_PADDING }}>
+                {showTodayMarker && todayMarker && (
+                  <div
+                    className="pointer-events-none absolute bottom-0 w-0 border-l-2 border-rose-500 z-30"
+                    style={{ left: todayMarker.left, top: TIMELINE_TOP_PADDING }}
+                  >
+                    <div className="absolute -top-6 left-1/2 -translate-x-1/2">
+                      <span className="inline-flex flex-col items-center gap-[1px] rounded bg-rose-500 px-1.5 py-[1px] text-white text-[10px] font-semibold shadow-sm">
+                        <span className="leading-none text-[9px] font-medium">{todayMarker.label}</span>
+                      </span>
+                    </div>
+                  </div>
+                )}
                 {/* Header timeline */}
                 <div className="border-b border-slate-200">
                   <div className="grid" style={{ gridTemplateColumns: `250px${showCustomer ? ' 150px' : ''}${showInclude ? ' 62px' : ''} repeat(${schedule.horizonDays}, ${CELL_W}px)` }}>
@@ -749,7 +810,7 @@ export default function App() {
                           <div
                             className="absolute rounded-xl shadow-sm border border-black/10 flex items-center"
                             style={{
-                              left: (showCustomer ? 400 : 250) + Math.max(0, epicSummary.start) * CELL_W,
+                              left: timelineStaticOffset + Math.max(0, epicSummary.start) * CELL_W,
                               top: Math.floor((ROW_H - 20) / 2),
                               height: 20,
                               width: epicSummary.duration * CELL_W,
@@ -819,7 +880,7 @@ export default function App() {
                                 onPointerMove={onBarPointerMove}
                                 onPointerUp={onBarPointerUp}
                                 style={{
-                                  left: (showCustomer ? 400 : 250) + Math.max(0, row.start) * CELL_W,
+                                  left: timelineStaticOffset + Math.max(0, row.start) * CELL_W,
                                   top: Math.floor((ROW_H - 28) / 2), // Center the 28px bar in the taller row
                                   height: 28, // Fixed bar height regardless of row height
                                   width: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W,
