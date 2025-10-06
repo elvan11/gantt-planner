@@ -382,10 +382,9 @@ export default function App() {
       if (rawCells.length < 3) return line; // Skip lines that don't have enough columns
 
       const normalized = normalizeRowCells(rawCells);
-      const epic = sanitizeCell(normalized[0]);
-      const desc = sanitizeCell(normalized[1]);
+      const rowId = taskIdFromNormalizedRow(normalized);
 
-      if (epic === task.epic && desc === task.desc) {
+      if (rowId === task.id) {
         const updated = [...normalized];
         updated[5] = includeFlag ? 'true' : 'false';
         return formatMarkdownRow(updated);
@@ -425,10 +424,9 @@ export default function App() {
       if (rawCells.length < 3) return line;
 
       const normalized = normalizeRowCells(rawCells);
-      const epic = sanitizeCell(normalized[0]);
-      const desc = sanitizeCell(normalized[1]);
+      const rowId = taskIdFromNormalizedRow(normalized);
 
-      if (epic === task.epic && desc === task.desc) {
+      if (rowId === task.id) {
         const updated = [...normalized];
         updated[6] = completionValue === null ? '' : formatCompletionValue(completionValue);
         if (!updated[5]) updated[5] = 'true';
@@ -485,13 +483,11 @@ export default function App() {
       if (rawCells.length < 3) return line;
 
       const normalized = normalizeRowCells(rawCells);
-      const epic = sanitizeCell(normalized[0]);
-      const desc = sanitizeCell(normalized[1]);
+      const rowId = taskIdFromNormalizedRow(normalized);
+      const startIdx = startMapping[rowId];
+      if (startIdx === undefined) return line;
 
-      const task = tasksWithIds.find(t => t.epic === epic && t.desc === desc);
-      if (!task || startMapping[task.id] === undefined) return line;
-
-      const startDateStr = getIsoForStartIndex(startMapping[task.id]);
+      const startDateStr = getIsoForStartIndex(startIdx);
 
       const updated = [...normalized];
       updated[3] = startDateStr;
@@ -1271,6 +1267,13 @@ function normalizeRowCells(rawCells: string[]): string[] {
   }
 
   return base;
+}
+
+function taskIdFromNormalizedRow(normalized: string[]): string {
+  const epic = sanitizeCell(normalized[0] ?? '');
+  const desc = sanitizeCell(normalized[1] ?? '');
+  const hours = parseHours(normalized[2] ?? '');
+  return hashId(`${epic}|${desc}|${hours}`);
 }
 
 function isDateLike(value: string): boolean {
