@@ -442,7 +442,39 @@ export default function App() {
   };
 
   // Function to update the markdown table with calculated start dates
-  const updateMarkdownStartDates = () => {
+  const updateMarkdownStartDates = (
+    startOverrides?: Record<string, number>,
+    daysOverride?: Date[]
+  ) => {
+    const startMapping = startOverrides ?? starts;
+    let positiveDays = daysOverride ?? days;
+
+    const getIsoForStartIndex = (startDayIndex: number | undefined): string => {
+      if (typeof startDayIndex !== 'number' || Number.isNaN(startDayIndex)) return '';
+
+      if (startDayIndex >= 0) {
+        if (!positiveDays[startDayIndex]) {
+          const neededCount = startDayIndex + 1;
+          positiveDays = buildWorkingDays({ startISO: startDate, count: neededCount, skipWeekends });
+        }
+        const targetDay = positiveDays[startDayIndex];
+        return targetDay ? targetDay.toISOString().slice(0, 10) : '';
+      }
+
+      const projectStart = isoToLocalDate(startDate);
+      const actualStart = new Date(projectStart.getTime());
+      let remaining = -startDayIndex;
+
+      while (remaining > 0) {
+        actualStart.setDate(actualStart.getDate() - 1);
+        if (!skipWeekends || !isWeekend(actualStart)) {
+          remaining--;
+        }
+      }
+
+      return actualStart.toISOString().slice(0, 10);
+    };
+
     const lines = markdown.split(/\r?\n/);
     const updatedLines = lines.map(line => {
       if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
@@ -457,20 +489,9 @@ export default function App() {
       const desc = sanitizeCell(normalized[1]);
 
       const task = tasksWithIds.find(t => t.epic === epic && t.desc === desc);
-      if (!task || starts[task.id] === undefined) return line;
+      if (!task || startMapping[task.id] === undefined) return line;
 
-      const startDayIndex = starts[task.id];
-      let startDateStr = '';
-
-      if (startDayIndex >= 0 && days[startDayIndex]) {
-        startDateStr = days[startDayIndex].toISOString().slice(0, 10);
-      } else if (startDayIndex < 0) {
-        // Calculate date before project start
-        const projectStart = new Date(startDate);
-        const actualStart = new Date(projectStart);
-        actualStart.setDate(projectStart.getDate() + startDayIndex);
-        startDateStr = actualStart.toISOString().slice(0, 10);
-      }
+      const startDateStr = getIsoForStartIndex(startMapping[task.id]);
 
       const updated = [...normalized];
       updated[3] = startDateStr;
@@ -484,40 +505,24 @@ export default function App() {
 
   // Function to reset Gantt planning and recalculate sequential dates
   const resetGanttPlanning = () => {
-    // First, clear all start dates from the markdown table
-    const lines = markdown.split(/\r?\n/);
-    const updatedLines = lines.map(line => {
-      if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
-        return line;
-      }
-
-      const rawCells = splitMarkdownRow(line);
-      if (rawCells.length < 3) return line;
-
-      const normalized = normalizeRowCells(rawCells);
-      const updated = [...normalized];
-      updated[3] = '';
-      if (!updated[5]) updated[5] = 'true';
-
-      return formatMarkdownRow(updated);
-    });
-    
-    // Update markdown first
-    setMarkdown(updatedLines.join('\n'));
-    
-    // Reset starts to sequential order (one task at a time)
-    const newStarts = {};
+    const newStarts: Record<string, number> = {};
+    const cap = Math.max(1e-6, speed * hoursPerDay);
     let cursor = 0;
-    
+
     for (const task of tasksWithIds) {
       newStarts[task.id] = cursor;
-      // Calculate naive duration for this task (no concurrency)
-      const cap = Math.max(1e-6, speed * hoursPerDay);
       const duration = Math.max(1, Math.ceil(task.hours / cap));
-      cursor += duration; // Move cursor to start of next task
+      cursor += duration;
     }
-    
+
+    const workingDaysForReset = buildWorkingDays({
+      startISO: startDate,
+      count: Math.max(cursor + 1, 1),
+      skipWeekends,
+    });
+
     setStarts(newStarts);
+    updateMarkdownStartDates(newStarts, workingDaysForReset);
   };
 
   // -------------------- Render --------------------
