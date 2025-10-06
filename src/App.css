@@ -36,3 +36,38 @@
     transform: rotate(360deg);
   }
 }
+
+.progress-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background-color: rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+  border-radius: inherit;
+}
+
+.progress-overlay--striped {
+  background-image: repeating-linear-gradient(
+    45deg,
+    rgba(255, 255, 255, 0.75) 0,
+    rgba(255, 255, 255, 0.75) 8px,
+    rgba(255, 255, 255, 0.2) 8px,
+    rgba(255, 255, 255, 0.2) 16px
+  );
+  animation: progress-stripes 1.4s linear infinite;
+}
+
+.progress-overlay--complete {
+  background-color: rgba(34, 197, 94, 0.55);
+  animation: none;
+}
+
+@keyframes progress-stripes {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 32px 0;
+  }
+}

@@ -4,7 +4,7 @@ import VersionChecker from "./VersionChecker";
 /**
  * Gantt Planner – Markdown‑driven
  * -------------------------------------------------------------
- * Paste a Markdown table with columns: Epic | Task description | Estimated time in hours | Start date (optional) | Customer Request (optional) | Include in Algorithm (optional)
+ * Paste a Markdown table with columns: Epic | Task description | Estimated time in hours | Start date (optional) | Customer Request (optional) | Include in Algorithm (optional) | Completion % (optional)
  * Example:
  * | Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm |
  * | --- | --- | --- | --- | --- | --- |
@@ -44,23 +44,17 @@ export default function App() {
         return line;
       }
       
-      const cols = line.split('|').map(c => c.trim());
-      if (cols.length < 3) return line; // Skip lines that don't have enough columns
-      
+      const rawCells = splitMarkdownRow(line);
+      if (rawCells.length < 3) return line; // Skip lines that don't have enough columns
+
       const includeParam = params.get(`task${taskIndex}_include`);
       if (includeParam !== null) {
-        // Ensure we have enough columns
-        while (cols.length < 7) {
-          cols.push(' ');
-        }
-        
-        // Update the include flag column (6th column, index 6)
-        cols[6] = ` ${includeParam} `;
+        const normalized = normalizeRowCells(rawCells);
+        normalized[5] = includeParam;
         taskIndex++;
-        
-        return cols.join('|');
+        return formatMarkdownRow(normalized);
       }
-      
+
       taskIndex++;
       return line;
     });
@@ -69,7 +63,7 @@ export default function App() {
   };
 
   // Load markdown from query param, localStorage, or default
-  const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm |\n| --- | --- | ---: | --- | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova | true |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova | true |\n| Products | Default product visibility for all | 0 | | Ventinova | true |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova | true |`;
+  const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion % |\n| --- | --- | ---: | --- | --- | --- | ---: |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova | true | 25 |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova | true | 10 |\n| Products | Default product visibility for all | 0 | | Ventinova | true | 0 |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova | true | 0 |`;
   const [markdown, setMarkdown] = useState(() => {
     const qp = getQueryParam('mdTable');
     if (qp) {
@@ -286,13 +280,31 @@ export default function App() {
   const CELL_W = cellWidth;
   const ROW_H = 66; // Increased from 36 to allow text wrapping
   const TIMELINE_TOP_PADDING = 24;
+  const TASK_COL_WIDTH = 250;
+  const CUSTOMER_COL_WIDTH = 150;
+  const INCLUDE_COL_WIDTH = 62;
+  const COMPLETION_COL_WIDTH = 110;
 
   // Show/hide Customer and Include columns
   const [showCustomer, setShowCustomer] = useState(true);
   const [showInclude, setShowInclude] = useState(true);
   const [showTodayMarker, setShowTodayMarker] = useState(true);
 
-  const timelineStaticOffset = 250 + (showCustomer ? 150 : 0) + (showInclude ? 62 : 0);
+  const timelineStaticOffset =
+    TASK_COL_WIDTH +
+    (showCustomer ? CUSTOMER_COL_WIDTH : 0) +
+    (showInclude ? INCLUDE_COL_WIDTH : 0) +
+    COMPLETION_COL_WIDTH;
+
+  const customerColumnLeft = TASK_COL_WIDTH;
+  const includeColumnLeft = TASK_COL_WIDTH + (showCustomer ? CUSTOMER_COL_WIDTH : 0);
+  const completionColumnLeft = includeColumnLeft + (showInclude ? INCLUDE_COL_WIDTH : 0);
+  const staticColumnTemplate = [
+    `${TASK_COL_WIDTH}px`,
+    ...(showCustomer ? [`${CUSTOMER_COL_WIDTH}px`] : []),
+    ...(showInclude ? [`${INCLUDE_COL_WIDTH}px`] : []),
+    `${COMPLETION_COL_WIDTH}px`,
+  ].join(" ");
 
   const todayMarker = useMemo(() => {
     if (!days.length) return null;
@@ -359,35 +371,73 @@ export default function App() {
   const updateTaskIncludeFlag = (taskId: string, includeFlag: boolean) => {
     const task = tasksWithIds.find(t => t.id === taskId);
     if (!task) return;
-    
+
     const lines = markdown.split(/\r?\n/);
     const updatedLines = lines.map(line => {
       if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
         return line;
       }
-      
-      const cols = line.split('|').map(c => c.trim());
-      if (cols.length < 4) return line; // Skip lines that don't have enough columns
-      
-      const epic = sanitizeCell(cols[1]);
-      const desc = sanitizeCell(cols[2]);
-      
-      // Find matching task
+
+      const rawCells = splitMarkdownRow(line);
+      if (rawCells.length < 3) return line; // Skip lines that don't have enough columns
+
+      const normalized = normalizeRowCells(rawCells);
+      const epic = sanitizeCell(normalized[0]);
+      const desc = sanitizeCell(normalized[1]);
+
       if (epic === task.epic && desc === task.desc) {
-        // Ensure we have enough columns
-        while (cols.length < 7) {
-          cols.push(' ');
-        }
-        
-        // Update the include flag column (6th column, index 6)
-        cols[6] = ` ${includeFlag} `;
-        
-        return cols.join('|');
+        const updated = [...normalized];
+        updated[5] = includeFlag ? 'true' : 'false';
+        return formatMarkdownRow(updated);
       }
-      
+
       return line;
     });
-    
+
+    setMarkdown(updatedLines.join('\n'));
+  };
+
+  const handleTaskCompletionChange = (taskId: string, rawValue: string) => {
+    const task = tasksWithIds.find(t => t.id === taskId);
+    if (!task) return;
+
+    if (rawValue === '') {
+      updateTaskCompletionInMarkdown(task, null);
+      return;
+    }
+
+    const numeric = Number(rawValue);
+    if (!Number.isFinite(numeric)) return;
+
+    const clampedValue = clamp(numeric, 0, 100);
+    const roundedValue = Math.round(clampedValue * 100) / 100;
+    updateTaskCompletionInMarkdown(task, roundedValue);
+  };
+
+  const updateTaskCompletionInMarkdown = (task: Task, completionValue: number | null) => {
+    const lines = markdown.split(/\r?\n/);
+    const updatedLines = lines.map(line => {
+      if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
+        return line;
+      }
+
+      const rawCells = splitMarkdownRow(line);
+      if (rawCells.length < 3) return line;
+
+      const normalized = normalizeRowCells(rawCells);
+      const epic = sanitizeCell(normalized[0]);
+      const desc = sanitizeCell(normalized[1]);
+
+      if (epic === task.epic && desc === task.desc) {
+        const updated = [...normalized];
+        updated[6] = completionValue === null ? '' : formatCompletionValue(completionValue);
+        if (!updated[5]) updated[5] = 'true';
+        return formatMarkdownRow(updated);
+      }
+
+      return line;
+    });
+
     setMarkdown(updatedLines.join('\n'));
   };
 
@@ -398,60 +448,37 @@ export default function App() {
       if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
         return line;
       }
-      
-      const cols = line.split('|').map(c => c.trim());
-      if (cols.length < 4) return line; // Skip lines that don't have enough columns
-      
-      const epic = sanitizeCell(cols[1]);
-      const desc = sanitizeCell(cols[2]);
-      
-      // Find matching task
+
+      const rawCells = splitMarkdownRow(line);
+      if (rawCells.length < 3) return line;
+
+      const normalized = normalizeRowCells(rawCells);
+      const epic = sanitizeCell(normalized[0]);
+      const desc = sanitizeCell(normalized[1]);
+
       const task = tasksWithIds.find(t => t.epic === epic && t.desc === desc);
-      if (task && starts[task.id] !== undefined) {
-        const startDayIndex = starts[task.id];
-        let startDateStr = '';
-        
-        if (startDayIndex >= 0 && days[startDayIndex]) {
-          startDateStr = days[startDayIndex].toISOString().slice(0, 10);
-        } else if (startDayIndex < 0) {
-          // Calculate date before project start
-          const projectStart = new Date(startDate);
-          const actualStart = new Date(projectStart);
-          actualStart.setDate(projectStart.getDate() + startDayIndex);
-          startDateStr = actualStart.toISOString().slice(0, 10);
-        }
-        
-        // Detect current structure: check if col4 looks like a date or customer request
-        const col4 = sanitizeCell(cols[3]);
-        const isCurrentlyDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
-        
-        if (isCurrentlyDateLike || cols.length >= 6) {
-          // Current structure: Epic | Task | Hours | Date | Customer | Include
-          // Update the fourth column (start date)
-          cols[4] = ` ${startDateStr} `;
-          
-          // Ensure we preserve the fifth column (customer request) if it exists
-          if (cols.length < 6) {
-            cols[5] = ' '; // Add empty customer request column if missing
-          }
-          
-          // Ensure we preserve the sixth column (include flag) if it exists
-          if (cols.length < 7) {
-            cols[6] = ' true '; // Add default include flag if missing
-          }
-        } else {
-          // Current structure: Epic | Task | Hours | Customer (no date column)
-          // We need to insert a date column
-          const customerRequest = cols[4] || '';
-          cols[4] = ` ${startDateStr} `;
-          cols[5] = ` ${customerRequest} `;
-          cols[6] = ' true '; // Add default include flag
-        }
+      if (!task || starts[task.id] === undefined) return line;
+
+      const startDayIndex = starts[task.id];
+      let startDateStr = '';
+
+      if (startDayIndex >= 0 && days[startDayIndex]) {
+        startDateStr = days[startDayIndex].toISOString().slice(0, 10);
+      } else if (startDayIndex < 0) {
+        // Calculate date before project start
+        const projectStart = new Date(startDate);
+        const actualStart = new Date(projectStart);
+        actualStart.setDate(projectStart.getDate() + startDayIndex);
+        startDateStr = actualStart.toISOString().slice(0, 10);
       }
-      
-      return cols.join('|');
+
+      const updated = [...normalized];
+      updated[3] = startDateStr;
+      if (!updated[5]) updated[5] = 'true';
+
+      return formatMarkdownRow(updated);
     });
-    
+
     setMarkdown(updatedLines.join('\n'));
   };
 
@@ -463,38 +490,16 @@ export default function App() {
       if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
         return line;
       }
-      
-      const cols = line.split('|').map(c => c.trim());
-      if (cols.length < 4) return line; // Skip lines that don't have enough columns
-      
-      // Detect current structure: check if col4 looks like a date or customer request
-      const col4 = sanitizeCell(cols[3]);
-      const isCurrentlyDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
-      
-      if (isCurrentlyDateLike || cols.length >= 6) {
-        // Current structure: Epic | Task | Hours | Date | Customer | Include
-        // Clear the fourth column (start date) but preserve structure
-        cols[4] = ' '; // Empty start date
-        
-        // Ensure we preserve the fifth column (customer request) if it exists
-        if (cols.length < 6) {
-          cols[5] = ' '; // Add empty customer request column if missing
-        }
-        
-        // Ensure we preserve the sixth column (include flag) if it exists
-        if (cols.length < 7) {
-          cols[6] = ' true '; // Add default include flag if missing
-        }
-      } else {
-        // Current structure: Epic | Task | Hours | Customer (no date column)
-        // We need to insert an empty date column and move customer to col5
-        const customerRequest = cols[4] || '';
-        cols[4] = ' '; // Empty start date
-        cols[5] = ` ${customerRequest} `;
-        cols[6] = ' true '; // Add default include flag
-      }
-      
-      return cols.join('|');
+
+      const rawCells = splitMarkdownRow(line);
+      if (rawCells.length < 3) return line;
+
+      const normalized = normalizeRowCells(rawCells);
+      const updated = [...normalized];
+      updated[3] = '';
+      if (!updated[5]) updated[5] = 'true';
+
+      return formatMarkdownRow(updated);
     });
     
     // Update markdown first
@@ -525,7 +530,7 @@ export default function App() {
       <div className="mx-auto max-w-[2000px] p-4 md:p-6 flex flex-col w-full">
         <h1 className="text-2xl md:text-3xl font-semibold tracking-tight text-slate-600">Rekonnect planner</h1>
       <p className="text-sm text-slate-600">
-        Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
+        Paste a Markdown table (Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion %). Drag bars to shift; durations auto-recalculate with overlap. Start dates update automatically. Colors = Epic.
       </p>
 
   {/* Editor/Settings Section */}
@@ -656,10 +661,13 @@ export default function App() {
 
             <div className="mt-3 text-xs text-slate-500">
               <p>
-                Tip: Use integers for hours (e.g., <code>40</code>) or soft estimates like <code>~30h</code>. Add a fourth column for start dates (optional), a fifth column for customer requests, and a sixth column for algorithm inclusion (true/false). Speed=1 with 8h/day means one developer working full time.
+                Tip: Use integers for hours (e.g., <code>40</code>) or soft estimates like <code>~30h</code>. Add a fourth column for start dates (optional), a fifth column for customer requests, a sixth column for algorithm inclusion (true/false), and a final column for completion percentage (0–100). Speed=1 with 8h/day means one developer working full time.
               </p>
               <p className="mt-2">
                 <strong>Include column:</strong> Use the checkboxes in the Include column to control which tasks are included in the Gantt chart's concurrency and scheduling calculations. Unchecking a box will exclude that task from the automatic calendar time calculation, but the task will still be shown in the chart.
+              </p>
+              <p className="mt-2">
+                <strong>Completion column:</strong> Update the percentage complete for any task directly in the table or timeline grid. Values are clamped between 0 and 100 and sync back to the Markdown table automatically.
               </p>
             </div>
           </div>
@@ -734,14 +742,30 @@ export default function App() {
                 )}
                 {/* Header timeline */}
                 <div className="border-b border-slate-200">
-                  <div className="grid" style={{ gridTemplateColumns: `250px${showCustomer ? ' 150px' : ''}${showInclude ? ' 62px' : ''} repeat(${schedule.horizonDays}, ${CELL_W}px)` }}>
+                  <div className="grid" style={{ gridTemplateColumns: `${staticColumnTemplate} repeat(${schedule.horizonDays}, ${CELL_W}px)` }}>
                     <div className="bg-white px-3 py-2 text-xs font-medium sticky left-0 z-20 border-r border-slate-200">Task</div>
                     {showCustomer && (
-                      <div className="bg-white px-3 py-2 text-xs font-medium sticky left-[250px] z-20 border-l border-slate-200 border-r border-slate-200">Customer</div>
+                      <div
+                        className="bg-white px-3 py-2 text-xs font-medium sticky z-20 border-l border-slate-200 border-r border-slate-200"
+                        style={{ left: customerColumnLeft }}
+                      >
+                        Customer
+                      </div>
                     )}
                     {showInclude && (
-                      <div className={`bg-white px-3 py-2 text-xs font-medium sticky ${showCustomer ? 'left-[400px]' : 'left-[250px]'} z-20 border-l border-slate-200 border-r border-slate-200`}>Include</div>
+                      <div
+                        className="bg-white px-3 py-2 text-xs font-medium sticky z-20 border-l border-slate-200 border-r border-slate-200"
+                        style={{ left: includeColumnLeft }}
+                      >
+                        Include
+                      </div>
                     )}
+                    <div
+                      className="bg-white px-3 py-2 text-xs font-medium sticky z-20 border-l border-slate-200 border-r border-slate-200"
+                      style={{ left: completionColumnLeft }}
+                    >
+                      Complete %
+                    </div>
                     {/* Month and day header */}
                     {(() => {
                       let lastMonth = null;
@@ -771,7 +795,7 @@ export default function App() {
                 {Object.entries(epicGroups).map(([epic, tasks]) => {
                   const isFolded = foldedEpics.has(epic);
                   const epicSummary = getEpicSummary(tasks);
-                  const gridCols = `250px${showCustomer ? ' 150px' : ''}${showInclude ? ' 62px' : ''} repeat(${schedule.horizonDays}, ${CELL_W}px)`;
+                  const gridCols = `${staticColumnTemplate} repeat(${schedule.horizonDays}, ${CELL_W}px)`;
                   return (
                     <div key={epic}>
                       {/* Epic section header */}
@@ -792,11 +816,21 @@ export default function App() {
                           <span className="text-xs font-normal text-slate-600 ml-2">{(tasks as Task[]).length} tasks</span>
                         </div>
                         {showCustomer && (
-                          <div className="sticky left-[250px] z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300"></div>
+                          <div
+                            className="sticky z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300"
+                            style={{ left: customerColumnLeft }}
+                          ></div>
                         )}
                         {showInclude && (
-                          <div className={`sticky ${showCustomer ? 'left-[400px]' : 'left-[250px]'} z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300`}></div>
+                          <div
+                            className="sticky z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300"
+                            style={{ left: includeColumnLeft }}
+                          ></div>
                         )}
+                        <div
+                          className="sticky z-10 bg-slate-50 border-r border-slate-300 border-l border-slate-300 border-b border-slate-300"
+                          style={{ left: completionColumnLeft }}
+                        ></div>
                         {/* Empty cells for timeline */}
                         {days.map((d, i) => {
                           const isMonday = d.getDay() === 1;
@@ -829,6 +863,12 @@ export default function App() {
                       {!isFolded && (tasks as Task[]).map((t) => {
                         const row = schedule.rows[t.id];
                         const color = colorForEpic(t.epic);
+                        const completionValue =
+                          typeof t.completionPercentage === 'number'
+                            ? clamp(t.completionPercentage, 0, 100)
+                            : null;
+                        const completionLabel =
+                          completionValue !== null ? `${formatCompletionValue(completionValue)}%` : null;
                         return (
                           <div key={t.id} className="relative grid items-start" style={{ gridTemplateColumns: gridCols, height: ROW_H }}>
                             {/* Frozen first column with task label */}
@@ -842,7 +882,10 @@ export default function App() {
 
                             {/* Frozen second column with customer request */}
                             {showCustomer && (
-                              <div className="sticky left-[250px] z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200">
+                              <div
+                                className="sticky z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200"
+                                style={{ left: customerColumnLeft }}
+                              >
                                 {t.customerRequest && (
                                   <span className="inline-block px-2 py-1 bg-blue-100 text-blue-800 text-xs font-medium rounded-full border border-blue-200">
                                     {t.customerRequest}
@@ -853,7 +896,10 @@ export default function App() {
 
                             {/* Frozen third column with include checkbox */}
                             {showInclude && (
-                              <div className={`sticky ${showCustomer ? 'left-[400px]' : 'left-[250px]'} z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200`}>
+                              <div
+                                className="sticky z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200"
+                                style={{ left: includeColumnLeft }}
+                              >
                                 <input
                                   type="checkbox"
                                   checked={t.includeInAlgorithm}
@@ -863,6 +909,23 @@ export default function App() {
                                 />
                               </div>
                             )}
+
+                            {/* Frozen completion column with editable percentage */}
+                            <div
+                              className="sticky z-10 bg-white flex items-center justify-center px-3 py-2 h-full border-b border-slate-100 border-r border-slate-200 border-l border-slate-200"
+                              style={{ left: completionColumnLeft }}
+                            >
+                              <input
+                                type="number"
+                                min={0}
+                                max={100}
+                                step={1}
+                                value={t.completionPercentage ?? ""}
+                                onChange={(e) => handleTaskCompletionChange(t.id, e.target.value)}
+                                className="w-20 rounded-md border border-slate-300 px-2 py-1 text-sm text-slate-700 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                                aria-label="Completion percentage"
+                              />
+                            </div>
 
                             {/* Grid cells background */}
                             {days.map((d, i) => {
@@ -885,9 +948,17 @@ export default function App() {
                                   height: 28, // Fixed bar height regardless of row height
                                   width: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W,
                                   backgroundColor: color,
+                                  position: 'relative',
+                                  overflow: 'hidden',
                                 }}
                                 title={`${t.desc}\n${t.epic}\n${t.hours}h • ${row.durationDays}d\n${row.start < 0 ? 'Starts before project start' : formatShortDate(days[row.start])} → ${formatShortDate(days[Math.min(days.length - 1, Math.max(0, row.start) + Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) - 1)])}`}
                               >
+                                  {completionValue !== null && completionValue > 0 && (
+                                    <div
+                                      className={`progress-overlay ${completionValue >= 100 ? 'progress-overlay--complete' : 'progress-overlay--striped'}`}
+                                      style={{ width: `${completionValue}%` }}
+                                    ></div>
+                                  )}
                                   <span
                                     className={`text-xs font-medium text-white drop-shadow-sm ${Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W < 40 ? 'ml-1' : 'ml-3'}`}
                                     style={{
@@ -899,7 +970,7 @@ export default function App() {
                                       textOverflow: 'ellipsis',
                                     }}
                                   >
-                                    {row.durationDays}d
+                                    {row.durationDays}d{completionLabel ? ` • ${completionLabel}` : ''}
                                   </span>
                               </div>
                             )}
@@ -965,6 +1036,7 @@ interface Task {
   startDateStr?: string; // optional start date from markdown
   customerRequest?: string; // optional customer request from markdown
   includeInAlgorithm: boolean; // whether to include in concurrency algorithm
+  completionPercentage: number | null; // progress percentage (0-100)
 }
 
 interface ScheduleResult {
@@ -1093,71 +1165,25 @@ function parseMarkdownTable(md: string): Task[] {
 
   const parsed: Task[] = [];
   for (let i = startIdx; i < dataRows.length; i++) {
-    const cols = dataRows[i]
-      .split("|")
-      .map((c) => c.trim())
-      .filter((c) => c.length > 0);
-    if (cols.length < 3) continue;
-    const epic = sanitizeCell(cols[0]);
-    const desc = sanitizeCell(cols[1]);
-    const hours = parseHours(cols[2]);
-    
-    let startDateStr = "";
-    let customerRequest = "";
-    let includeInAlgorithm = true; // Default to true
-    
-    if (cols.length > 3) {
-      const col4 = sanitizeCell(cols[3]);
-      const col5 = cols.length > 4 ? sanitizeCell(cols[4]) : "";
-      const col6 = cols.length > 5 ? sanitizeCell(cols[5]) : "";
-      
-      // Check if col4 looks like a date (YYYY-MM-DD format or empty)
-      const isDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
-      
-      if (isDateLike) {
-        // Column 4 is a date (or empty), column 5 is customer request, column 6 is include flag
-        startDateStr = col4;
-        customerRequest = col5;
-        if (col6) {
-          includeInAlgorithm = parseBooleanSafe(col6, true);
-        }
-      } else {
-        // Check if we have the old format without date column
-        if (cols.length === 4) {
-          // Column 4 is customer request, no date or include flag
-          startDateStr = "";
-          customerRequest = col4;
-          includeInAlgorithm = true;
-        } else if (cols.length === 5) {
-          // Could be: Epic | Task | Hours | Customer | Include
-          // or: Epic | Task | Hours | Date | Customer (old format)
-          const isBooleanLike = /^(true|false|yes|no|1|0)$/i.test(col5);
-          if (isBooleanLike) {
-            // Epic | Task | Hours | Customer | Include
-            startDateStr = "";
-            customerRequest = col4;
-            includeInAlgorithm = parseBooleanSafe(col5, true);
-          } else {
-            // Epic | Task | Hours | Date | Customer (old format)
-            startDateStr = col4;
-            customerRequest = col5;
-            includeInAlgorithm = true;
-          }
-        } else {
-          // cols.length >= 6, assume: Epic | Task | Hours | Customer | Date | Include
-          // or Epic | Task | Hours | Date | Customer | Include
-          const col6 = cols.length > 5 ? sanitizeCell(cols[5]) : "";
-          startDateStr = "";
-          customerRequest = col4;
-          if (col6) {
-            includeInAlgorithm = parseBooleanSafe(col6, true);
-          }
-        }
-      }
+    const rawCells = splitMarkdownRow(dataRows[i]);
+    if (rawCells.length < 3) continue;
+
+    const normalized = normalizeRowCells(rawCells);
+    const epic = sanitizeCell(normalized[0]);
+    const desc = sanitizeCell(normalized[1]);
+    const hours = parseHours(normalized[2]);
+    const startDateStr = sanitizeCell(normalized[3]);
+    const customerRequest = sanitizeCell(normalized[4]);
+    const includeCell = sanitizeCell(normalized[5]);
+    const completionPercentage = parseCompletionCell(normalized[6]);
+
+    let includeInAlgorithm = true;
+    if (includeCell) {
+      includeInAlgorithm = parseBooleanSafe(includeCell, true);
     }
-    
+
     if (!epic || !desc) continue;
-    parsed.push({ id: "", epic, desc, hours, startDateStr, customerRequest, includeInAlgorithm });
+    parsed.push({ id: "", epic, desc, hours, startDateStr, customerRequest, includeInAlgorithm, completionPercentage });
   }
   return parsed;
 }
@@ -1165,6 +1191,107 @@ function parseMarkdownTable(md: string): Task[] {
 function sanitizeCell(s: string): string {
   // Strip Markdown emphasis and trailing pipes/spaces
   return s.replace(/^[*_`\s]+|[*_`\s]+$/g, "").replace(/\\\|/g, "|");
+}
+
+function splitMarkdownRow(line: string): string[] {
+  const cells = line.split('|').map((c) => c.trim());
+  if (cells.length && cells[0] === '') cells.shift();
+  if (cells.length && cells[cells.length - 1] === '') cells.pop();
+  return cells;
+}
+
+function formatMarkdownRow(cells: string[]): string {
+  const normalized = cells.map((cell) => (cell ?? '').trim());
+  return `| ${normalized.join(' | ')} |`;
+}
+
+function normalizeRowCells(rawCells: string[]): string[] {
+  const base = Array(7).fill('');
+  base[0] = rawCells[0] ?? '';
+  base[1] = rawCells[1] ?? '';
+  base[2] = rawCells[2] ?? '';
+
+  const extras = rawCells.slice(3);
+  const sanitized = extras.map(sanitizeCell);
+  const used = new Set<number>();
+
+  let startIndex = sanitized.findIndex((val) => isDateLike(val));
+  if (startIndex === -1 && extras.length > 0 && sanitized[0] === '') {
+    startIndex = 0;
+  }
+  if (startIndex !== -1) {
+    base[3] = extras[startIndex] ?? '';
+    used.add(startIndex);
+  }
+
+  let includeIndex = -1;
+  for (let i = 0; i < sanitized.length; i++) {
+    if (used.has(i)) continue;
+    const lower = sanitized[i].toLowerCase();
+    if (lower === 'true' || lower === 'false' || lower === 'yes' || lower === 'no') {
+      includeIndex = i;
+      break;
+    }
+    if ((lower === '1' || lower === '0') && (sanitized.length <= 2 || i < sanitized.length - 1)) {
+      includeIndex = i;
+      break;
+    }
+  }
+  if (includeIndex !== -1) {
+    base[5] = extras[includeIndex] ?? '';
+    used.add(includeIndex);
+  }
+
+  let completionIndex = -1;
+  for (let i = sanitized.length - 1; i >= 0; i--) {
+    if (used.has(i)) continue;
+    if (isPercentageLike(sanitized[i])) {
+      completionIndex = i;
+      break;
+    }
+  }
+  if (completionIndex !== -1) {
+    base[6] = extras[completionIndex] ?? '';
+    used.add(completionIndex);
+  }
+
+  for (let i = 0; i < extras.length; i++) {
+    if (used.has(i)) continue;
+    if (base[4] === '') {
+      base[4] = extras[i] ?? '';
+      used.add(i);
+      break;
+    }
+  }
+
+  return base;
+}
+
+function isDateLike(value: string): boolean {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value);
+}
+
+function isPercentageLike(value: string): boolean {
+  if (!value) return false;
+  const normalized = value.replace(/%/g, '');
+  const match = normalized.match(/^-?\d+(?:\.\d+)?$/);
+  if (!match) return false;
+  const num = parseFloat(match[0]);
+  return Number.isFinite(num) && num >= 0 && num <= 100;
+}
+
+function formatCompletionValue(value: number): string {
+  const clamped = clamp(value, 0, 100);
+  const fixed = clamped.toFixed(2);
+  return fixed.replace(/\.00$/, '').replace(/(\.\d*?)0+$/, '$1');
+}
+
+function parseCompletionCell(cell: string): number | null {
+  const cleaned = sanitizeCell(cell).replace(/%/g, '');
+  if (!cleaned) return null;
+  const num = parseFloat(cleaned);
+  if (!Number.isFinite(num)) return null;
+  return clamp(num, 0, 100);
 }
 
 function extractDataRows(md: string): string {
@@ -1210,9 +1337,9 @@ function ensureMarkdownHeaders(md: string): string {
   }
 
   // Add headers to the beginning
-  const header = "| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm |";
-  const separator = "| --- | --- | ---: | --- | --- | --- |";
-  
+  const header = "| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion % |";
+  const separator = "| --- | --- | ---: | --- | --- | --- | ---: |";
+
   return `${header}\n${separator}\n${md}`;
 }
 
