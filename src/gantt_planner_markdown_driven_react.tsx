@@ -949,6 +949,7 @@ export default function App() {
                                   width: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W,
                                   backgroundColor: color,
                                   position: 'relative',
+                                  zIndex: 5,
                                   overflow: 'hidden',
                                 }}
                                 title={`${t.desc}\n${t.epic}\n${t.hours}h • ${row.durationDays}d\n${row.start < 0 ? 'Starts before project start' : formatShortDate(days[row.start])} → ${formatShortDate(days[Math.min(days.length - 1, Math.max(0, row.start) + Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) - 1)])}`}
