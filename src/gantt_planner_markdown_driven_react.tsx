@@ -153,7 +153,13 @@ export default function App() {
   const tasks = useMemo(() => parseMarkdownTable(markdown), [markdown]);
 
   // Assign stable IDs based on hash of row content to preserve position on small edits
-  const tasksWithIds = useMemo(() => tasks.map((t) => ({ ...t, id: hashId(`${t.epic}|${t.desc}|${t.hours}`) })), [tasks]);
+  const tasksWithIds = useMemo(() => {
+    const assignId = createTaskIdResolver();
+    return tasks.map((t) => ({
+      ...t,
+      id: assignId(buildTaskSignature(t.epic, t.desc, t.hours)),
+    }));
+  }, [tasks]);
 
   // Function to extract include flags as query parameters
   const getIncludeFlags = useMemo(() => {
@@ -373,6 +379,7 @@ export default function App() {
     if (!task) return;
 
     const lines = markdown.split(/\r?\n/);
+    const resolveRowId = createMarkdownRowIdResolver();
     const updatedLines = lines.map(line => {
       if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
         return line;
@@ -382,7 +389,7 @@ export default function App() {
       if (rawCells.length < 3) return line; // Skip lines that don't have enough columns
 
       const normalized = normalizeRowCells(rawCells);
-      const rowId = taskIdFromNormalizedRow(normalized);
+      const rowId = resolveRowId(normalized);
 
       if (rowId === task.id) {
         const updated = [...normalized];
@@ -415,6 +422,7 @@ export default function App() {
 
   const updateTaskCompletionInMarkdown = (task: Task, completionValue: number | null) => {
     const lines = markdown.split(/\r?\n/);
+    const resolveRowId = createMarkdownRowIdResolver();
     const updatedLines = lines.map(line => {
       if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
         return line;
@@ -424,7 +432,7 @@ export default function App() {
       if (rawCells.length < 3) return line;
 
       const normalized = normalizeRowCells(rawCells);
-      const rowId = taskIdFromNormalizedRow(normalized);
+      const rowId = resolveRowId(normalized);
 
       if (rowId === task.id) {
         const updated = [...normalized];
@@ -474,6 +482,7 @@ export default function App() {
     };
 
     const lines = markdown.split(/\r?\n/);
+    const resolveRowId = createMarkdownRowIdResolver();
     const updatedLines = lines.map(line => {
       if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
         return line;
@@ -483,7 +492,7 @@ export default function App() {
       if (rawCells.length < 3) return line;
 
       const normalized = normalizeRowCells(rawCells);
-      const rowId = taskIdFromNormalizedRow(normalized);
+      const rowId = resolveRowId(normalized);
       const startIdx = startMapping[rowId];
       if (startIdx === undefined) return line;
 
@@ -1269,11 +1278,30 @@ function normalizeRowCells(rawCells: string[]): string[] {
   return base;
 }
 
-function taskIdFromNormalizedRow(normalized: string[]): string {
+function buildTaskSignature(epic: string, desc: string, hours: number): string {
+  return `${epic}|||${desc}|||${hours}`;
+}
+
+function normalizedRowSignature(normalized: string[]): string {
   const epic = sanitizeCell(normalized[0] ?? '');
   const desc = sanitizeCell(normalized[1] ?? '');
   const hours = parseHours(normalized[2] ?? '');
-  return hashId(`${epic}|${desc}|${hours}`);
+  return buildTaskSignature(epic, desc, hours);
+}
+
+function createTaskIdResolver() {
+  const counts = new Map<string, number>();
+  return (signature: string) => {
+    const occurrence = counts.get(signature) ?? 0;
+    counts.set(signature, occurrence + 1);
+    const keyedSignature = occurrence === 0 ? signature : `${signature}|||${occurrence}`;
+    return hashId(keyedSignature);
+  };
+}
+
+function createMarkdownRowIdResolver() {
+  const resolve = createTaskIdResolver();
+  return (normalized: string[]) => resolve(normalizedRowSignature(normalized));
 }
 
 function isDateLike(value: string): boolean {
