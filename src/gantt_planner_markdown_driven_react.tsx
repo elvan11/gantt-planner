@@ -964,7 +964,16 @@ export default function App() {
                                   top: Math.floor((ROW_H - 28) / 2), // Center the 28px bar in the taller row
                                   height: 28, // Fixed bar height regardless of row height
                                   width: Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) * CELL_W,
-                                  backgroundColor: color,
+                                  background: t.completionPercentage !== undefined && t.completionPercentage !== null && t.completionPercentage > 0
+                                    ? `repeating-linear-gradient(
+                                        45deg,
+                                        ${color},
+                                        ${color} 4px,
+                                        rgba(255, 255, 255, 0.3) 4px,
+                                        rgba(255, 255, 255, 0.3) 8px
+                                      ) 0 0 / ${t.completionPercentage}% 100% no-repeat,
+                                      ${color}`
+                                    : color,
                                 }}
                                 title={`${t.desc}\n${t.epic}\n${t.hours}h • ${row.durationDays}d\n${row.start < 0 ? 'Starts before project start' : formatShortDate(days[row.start])} → ${formatShortDate(days[Math.min(days.length - 1, Math.max(0, row.start) + Math.max(1, row.start < 0 ? row.durationDays + row.start : row.durationDays) - 1)])}`}
                               >
