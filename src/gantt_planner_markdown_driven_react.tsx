@@ -1176,8 +1176,10 @@ function parseMarkdownTable(md: string): Task[] {
   for (let i = startIdx; i < dataRows.length; i++) {
     const cols = dataRows[i]
       .split("|")
-      .map((c) => c.trim())
-      .filter((c) => c.length > 0);
+      .map((c) => c.trim());
+    // Remove leading/trailing empty columns but keep empty columns in the middle
+    while (cols.length > 0 && cols[0] === "") cols.shift();
+    while (cols.length > 0 && cols[cols.length - 1] === "") cols.pop();
     if (cols.length < 3) continue;
     const epic = sanitizeCell(cols[0]);
     const desc = sanitizeCell(cols[1]);
