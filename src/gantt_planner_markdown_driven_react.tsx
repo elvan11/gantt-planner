@@ -979,7 +979,7 @@ export default function App() {
                                       textOverflow: 'ellipsis',
                                     }}
                                   >
-                                    {row.durationDays}d
+                                    {row.durationDays}d{t.completionPercentage !== undefined && t.completionPercentage !== null ? ` • ${t.completionPercentage}%` : ''}
                                   </span>
                               </div>
                             )}
