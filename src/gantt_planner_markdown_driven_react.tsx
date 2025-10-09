@@ -27,9 +27,10 @@ import pako from "pako";
  */
 
 // -------------------- Compression Utilities --------------------
-// Compress markdown data using gzip + base64url encoding
-function compressData(text: string): string {
+// Compress any data (text or object) using gzip + base64url encoding
+function compressData(data: string | object): string {
   try {
+    const text = typeof data === 'string' ? data : JSON.stringify(data);
     const compressed = pako.deflate(text);
     // Convert to base64 and make URL-safe
     const base64 = btoa(String.fromCharCode(...compressed));
@@ -40,8 +41,8 @@ function compressData(text: string): string {
   }
 }
 
-// Decompress markdown data from base64url + gzip
-function decompressData(compressed: string): string {
+// Decompress data from base64url + gzip and optionally parse as JSON
+function decompressData(compressed: string, parseJSON: boolean = false): any {
   try {
     // Restore base64 from URL-safe format
     let base64 = compressed.replace(/-/g, '+').replace(/_/g, '/');
@@ -57,10 +58,10 @@ function decompressData(compressed: string): string {
     }
     // Decompress
     const decompressed = pako.inflate(bytes, { to: 'string' });
-    return decompressed;
+    return parseJSON ? JSON.parse(decompressed) : decompressed;
   } catch (e) {
     console.error('Decompression failed:', e);
-    return '';
+    return parseJSON ? null : '';
   }
 }
 
@@ -73,8 +74,39 @@ export default function App() {
     return params.get(key);
   };
 
-  // Function to apply include flags from query parameters
+  // Function to apply include flags from query parameters (for backward compatibility only)
   const applyIncludeFlagsFromQuery = (markdown: string) => {
+    // If we have loadedState with includeFlags, apply those instead
+    if (loadedState && loadedState.includeFlags) {
+      const lines = markdown.split(/\r?\n/);
+      let taskIndex = 0;
+      
+      const updatedLines = lines.map(line => {
+        if (!line.includes('|') || line.includes('---') || line.toLowerCase().includes('epic')) {
+          return line;
+        }
+        
+        const cols = line.split('|').map(c => c.trim());
+        if (cols.length < 3) return line;
+        
+        const includeFlag = loadedState.includeFlags[`task${taskIndex}_include`];
+        if (includeFlag !== undefined) {
+          while (cols.length < 8) {
+            cols.push(' ');
+          }
+          cols[6] = ` ${includeFlag} `;
+          taskIndex++;
+          return cols.join('|');
+        }
+        
+        taskIndex++;
+        return line;
+      });
+      
+      return updatedLines.join('\n');
+    }
+    
+    // Fall back to reading from individual query params (old format)
     const params = new URLSearchParams(window.location.search);
     const lines = markdown.split(/\r?\n/);
     let taskIndex = 0;
@@ -85,19 +117,15 @@ export default function App() {
       }
       
       const cols = line.split('|').map(c => c.trim());
-      if (cols.length < 3) return line; // Skip lines that don't have enough columns
+      if (cols.length < 3) return line;
       
       const includeParam = params.get(`task${taskIndex}_include`);
       if (includeParam !== null) {
-        // Ensure we have enough columns
         while (cols.length < 8) {
           cols.push(' ');
         }
-        
-        // Update the include flag column (6th column, index 6)
         cols[6] = ` ${includeParam} `;
         taskIndex++;
-        
         return cols.join('|');
       }
       
@@ -110,14 +138,33 @@ export default function App() {
 
   // Load markdown from query param, localStorage, or default
   const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion % |\n| --- | --- | ---: | --- | --- | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova | true | 0 |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova | true | 25 |\n| Products | Default product visibility for all | 0 | | Ventinova | true | 100 |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova | true | 50 |`;
+  
+  // Store the loaded state from URL parameter
+  const [loadedState, setLoadedState] = useState<any>(null);
+  
   const [markdown, setMarkdown] = useState(() => {
-    // Try compressed format first (mdData), then fall back to legacy format (mdTable)
-    const compressedQp = getQueryParam('mdData');
-    const legacyQp = getQueryParam('mdTable');
+    // Try new unified compressed format first (data), then fall back to legacy formats
+    const unifiedQp = getQueryParam('data');
+    const mdDataQp = getQueryParam('mdData'); // Old compressed markdown-only format
+    const legacyQp = getQueryParam('mdTable'); // Very old URL-encoded format
     
-    if (compressedQp) {
-      // New compressed format
-      const decompressed = decompressData(compressedQp);
+    if (unifiedQp) {
+      // New unified compressed format - contains all state
+      const state = decompressData(unifiedQp, true);
+      if (state && state.markdown) {
+        setLoadedState(state); // Store for other state values
+        let decodedMarkdown = state.markdown;
+        // If it doesn't have headers, add them
+        decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
+        // Ensure all columns are present
+        decodedMarkdown = ensureAllColumns(decodedMarkdown);
+        return decodedMarkdown;
+      }
+    }
+    
+    if (mdDataQp) {
+      // Old compressed markdown-only format
+      const decompressed = decompressData(mdDataQp, false);
       if (decompressed) {
         let decodedMarkdown = decompressed;
         // If it doesn't have headers, add them
@@ -127,11 +174,10 @@ export default function App() {
         // Apply include flags from query parameters
         return applyIncludeFlagsFromQuery(decodedMarkdown);
       }
-      // If decompression failed, fall through to legacy format or default
     }
     
     if (legacyQp) {
-      // Legacy URL-encoded format (backward compatibility)
+      // Very old URL-encoded format (backward compatibility)
       let decodedMarkdown = decodeURIComponent(legacyQp);
       // If it doesn't have headers, add them
       decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
@@ -159,12 +205,20 @@ export default function App() {
 
   // LocalStorage-backed state for settings fields, but allow query param override
   const getCachedOrQuery = (key, fallback, qpKey) => {
+    // First check if we have a value from the unified compressed state
+    if (loadedState && loadedState[key] !== undefined) {
+      return loadedState[key];
+    }
+    
+    // Then check individual query params (for backward compatibility)
     const qp = getQueryParam(qpKey || key);
     if (qp !== null) {
       if (typeof fallback === 'boolean') return qp === 'true';
       if (typeof fallback === 'number') return Number(qp);
       return qp;
     }
+    
+    // Finally check localStorage
     try {
       const v = localStorage.getItem(key);
       if (v === null) return fallback;
@@ -176,14 +230,14 @@ export default function App() {
     }
   };
 
-  const [speed, setSpeed] = useState(() => getCachedOrQuery('ganttSpeed', 1.0, 'speed'));
-  const [hoursPerDay, setHoursPerDay] = useState(() => getCachedOrQuery('ganttHoursPerDay', 8, 'hoursPerDay'));
+  const [speed, setSpeed] = useState(() => getCachedOrQuery('speed', 1.0, 'speed'));
+  const [hoursPerDay, setHoursPerDay] = useState(() => getCachedOrQuery('hoursPerDay', 8, 'hoursPerDay'));
   const todayISO = new Date().toISOString().slice(0, 10);
   const todayDate = useMemo(() => isoToLocalDate(todayISO), [todayISO]);
-  const [startDate, setStartDate] = useState(() => getCachedOrQuery('ganttStartDate', todayISO, 'startDate'));
-  const [skipWeekends, setSkipWeekends] = useState(() => getCachedOrQuery('ganttSkipWeekends', true, 'skipWeekends'));
+  const [startDate, setStartDate] = useState(() => getCachedOrQuery('startDate', todayISO, 'startDate'));
+  const [skipWeekends, setSkipWeekends] = useState(() => getCachedOrQuery('skipWeekends', true, 'skipWeekends'));
   // Filter and folding state
-  const [customerFilter, setCustomerFilter] = useState(() => getCachedOrQuery('ganttCustomerFilter', "", 'customerFilter'));
+  const [customerFilter, setCustomerFilter] = useState(() => getCachedOrQuery('customerFilter', "", 'customerFilter'));
 
   // Persist settings fields to localStorage
   useEffect(() => {
@@ -646,17 +700,22 @@ export default function App() {
                   const dataOnlyMarkdown = extractDataRows(markdown);
                   const includeFlags = getIncludeFlags;
                   
-                  // Use compressed format for the markdown data
-                  const compressed = compressData(dataOnlyMarkdown);
+                  // Create unified state object with all parameters
+                  const state = {
+                    markdown: dataOnlyMarkdown,
+                    speed: speed,
+                    hoursPerDay: hoursPerDay,
+                    startDate: startDate,
+                    skipWeekends: skipWeekends,
+                    customerFilter: customerFilter,
+                    includeFlags: includeFlags
+                  };
+                  
+                  // Compress the entire state as a single parameter
+                  const compressed = compressData(state);
                   
                   const params = new URLSearchParams({
-                    mdData: compressed, // New compressed format
-                    speed: String(speed),
-                    hoursPerDay: String(hoursPerDay),
-                    startDate: String(startDate),
-                    skipWeekends: String(skipWeekends),
-                    customerFilter: String(customerFilter),
-                    ...Object.fromEntries(Object.entries(includeFlags).map(([key, value]) => [key, String(value)]))
+                    data: compressed // Single compressed parameter containing all state
                   });
                   window.open(`${window.location.pathname}?${params.toString()}`, '_blank');
                 }}
@@ -761,17 +820,22 @@ export default function App() {
               const dataOnlyMarkdown = extractDataRows(markdown);
               const includeFlags = getIncludeFlags;
               
-              // Use compressed format for the markdown data
-              const compressed = compressData(dataOnlyMarkdown);
+              // Create unified state object with all parameters
+              const state = {
+                markdown: dataOnlyMarkdown,
+                speed: speed,
+                hoursPerDay: hoursPerDay,
+                startDate: startDate,
+                skipWeekends: skipWeekends,
+                customerFilter: customerFilter,
+                includeFlags: includeFlags
+              };
+              
+              // Compress the entire state as a single parameter
+              const compressed = compressData(state);
               
               const params = new URLSearchParams({
-                mdData: compressed, // New compressed format
-                speed: String(speed),
-                hoursPerDay: String(hoursPerDay),
-                startDate: String(startDate),
-                skipWeekends: String(skipWeekends),
-                customerFilter: String(customerFilter),
-                ...Object.fromEntries(Object.entries(includeFlags).map(([key, value]) => [key, String(value)]))
+                data: compressed // Single compressed parameter containing all state
               });
               window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
             }, [markdown, speed, hoursPerDay, startDate, skipWeekends, customerFilter, getIncludeFlags])}
