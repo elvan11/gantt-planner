@@ -969,8 +969,8 @@ export default function App() {
                                         45deg,
                                         ${color},
                                         ${color} 4px,
-                                        rgba(255, 255, 255, 0.3) 4px,
-                                        rgba(255, 255, 255, 0.3) 8px
+                                        rgba(255, 255, 255, 0.4) 4px,
+                                        rgba(255, 255, 255, 0.4) 8px
                                       ) 0 0 / ${t.completionPercentage}% 100% no-repeat,
                                       ${color}`
                                     : color,
