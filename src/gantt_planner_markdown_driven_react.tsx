@@ -77,12 +77,16 @@ export default function App() {
       let decodedMarkdown = decodeURIComponent(qp);
       // If it doesn't have headers, add them
       decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
+      // Ensure all columns are present
+      decodedMarkdown = ensureAllColumns(decodedMarkdown);
       // Apply include flags from query parameters
       return applyIncludeFlagsFromQuery(decodedMarkdown);
     }
     try {
       const cached = localStorage.getItem('ganttMarkdownTable');
-      return cached || defaultMarkdown;
+      // Ensure all columns are present in cached data
+      const normalizedCached = cached ? ensureAllColumns(cached) : defaultMarkdown;
+      return normalizedCached;
     } catch {
       return defaultMarkdown;
     }
@@ -599,7 +603,17 @@ export default function App() {
             </div>
             <textarea
               value={markdown}
-              onChange={(e) => setMarkdown(e.target.value)}
+              onChange={(e) => {
+                const newValue = e.target.value;
+                setMarkdown(newValue);
+              }}
+              onBlur={(e) => {
+                // Normalize markdown when user finishes editing
+                const normalized = ensureAllColumns(e.target.value);
+                if (normalized !== e.target.value) {
+                  setMarkdown(normalized);
+                }
+              }}
               className="mt-2 w-full h-64 md:h-80 font-mono text-sm rounded-xl border border-slate-200 p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               spellCheck={false}
             />
@@ -1315,6 +1329,132 @@ function ensureMarkdownHeaders(md: string): string {
   const separator = "| --- | --- | ---: | --- | --- | --- | --- |";
   
   return `${header}\n${separator}\n${md}`;
+}
+
+// Ensure all data rows have all 7 columns (Epic | Task | Hours | Start date | Customer | Include | Completion %)
+function ensureAllColumns(md: string): string {
+  const lines = md.split(/\r?\n/);
+  
+  const updatedLines = lines.map(line => {
+    // Skip empty lines, separator lines, and header lines
+    if (!line.includes('|') || /^\|?\s*-{2,}/.test(line)) {
+      return line;
+    }
+    
+    const cols = line.split('|').map(c => c.trim());
+    
+    // Check if this is a header row - look for "Task description" instead of just "Task" to avoid matching data rows
+    const isHeader = /Epic/i.test(line) && /Task description/i.test(line);
+    
+    // Remove leading/trailing empty columns
+    while (cols.length > 0 && cols[0] === "") cols.shift();
+    while (cols.length > 0 && cols[cols.length - 1] === "") cols.pop();
+    
+    // Skip if it's not a valid data row
+    if (cols.length < 3 && !isHeader) {
+      return line;
+    }
+    
+    // For data rows, ensure all 7 columns are present
+    // Structure: Epic | Task | Hours | Start date | Customer | Include | Completion %
+    if (!isHeader && cols.length >= 3) {
+      // We need exactly 7 columns
+      const expectedColumns = 7;
+      
+      // If we have 3 columns: Epic | Task | Hours
+      // Add: empty date, empty customer, true, 0
+      if (cols.length === 3) {
+        cols.push(''); // Start date
+        cols.push(''); // Customer Request
+        cols.push('true'); // Include in Algorithm
+        cols.push('0'); // Completion %
+      }
+      // If we have 4 columns: Epic | Task | Hours | (Date or Customer)
+      else if (cols.length === 4) {
+        const col4 = cols[3];
+        const isDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
+        
+        if (isDateLike) {
+          // Epic | Task | Hours | Date
+          cols.push(''); // Customer Request
+          cols.push('true'); // Include in Algorithm
+          cols.push('0'); // Completion %
+        } else {
+          // Epic | Task | Hours | Customer
+          // Insert empty date before customer
+          cols.splice(3, 0, '');
+          cols.push('true'); // Include in Algorithm
+          cols.push('0'); // Completion %
+        }
+      }
+      // If we have 5 columns
+      else if (cols.length === 5) {
+        const col4 = cols[3];
+        const col5 = cols[4];
+        const isDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
+        const isBooleanLike = /^(true|false|yes|no|1|0)$/i.test(col5);
+        
+        if (isDateLike && !isBooleanLike) {
+          // Epic | Task | Hours | Date | Customer
+          cols.push('true'); // Include in Algorithm
+          cols.push('0'); // Completion %
+        } else if (isDateLike && isBooleanLike) {
+          // Epic | Task | Hours | Date | Include
+          // Insert empty customer before include
+          cols.splice(4, 0, '');
+          cols.push('0'); // Completion %
+        } else if (!isDateLike && isBooleanLike) {
+          // Epic | Task | Hours | Customer | Include
+          // Insert empty date before customer
+          cols.splice(3, 0, '');
+          cols.push('0'); // Completion %
+        } else {
+          // Epic | Task | Hours | Customer | ???
+          // Assume missing date and include
+          cols.splice(3, 0, '');
+          cols.push('true'); // Include in Algorithm
+          cols.push('0'); // Completion %
+        }
+      }
+      // If we have 6 columns
+      else if (cols.length === 6) {
+        const col4 = cols[3];
+        const isDateLike = /^\d{4}-\d{2}-\d{2}$/.test(col4) || col4 === "";
+        
+        if (isDateLike) {
+          // Epic | Task | Hours | Date | Customer | Include
+          cols.push('0'); // Completion %
+        } else {
+          // Epic | Task | Hours | Customer | ??? | Include
+          // Assume missing date, insert it before customer
+          cols.splice(3, 0, '');
+          cols.push('0'); // Completion %
+        }
+      }
+      // If we have 7 or more columns, keep as is (all columns present)
+      
+      // Ensure we have exactly 7 columns
+      while (cols.length < expectedColumns) {
+        cols.push('0'); // Default completion to 0
+      }
+      
+      // Rebuild the line with proper spacing
+      return '| ' + cols.slice(0, expectedColumns).join(' | ') + ' |';
+    }
+    
+    // For header rows, ensure it has all 7 columns
+    if (isHeader) {
+      // If header doesn't have all columns, rebuild it
+      if (cols.length < 7) {
+        const header = "| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion % |";
+        return header;
+      }
+    }
+    
+    return line;
+  });
+  
+  return updatedLines.join('\n');
 }
 
 function parseHours(s: string): number {
