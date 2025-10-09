@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import VersionChecker from "./VersionChecker";
+import pako from "pako";
 
 /**
  * Gantt Planner – Markdown‑driven
@@ -24,6 +25,44 @@ import VersionChecker from "./VersionChecker";
  * - Auto recalculation after each drag or input change
  * - Completion percentage (0-100) can be set for each task
  */
+
+// -------------------- Compression Utilities --------------------
+// Compress markdown data using gzip + base64url encoding
+function compressData(text: string): string {
+  try {
+    const compressed = pako.deflate(text);
+    // Convert to base64 and make URL-safe
+    const base64 = btoa(String.fromCharCode(...compressed));
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+  } catch (e) {
+    console.error('Compression failed:', e);
+    return '';
+  }
+}
+
+// Decompress markdown data from base64url + gzip
+function decompressData(compressed: string): string {
+  try {
+    // Restore base64 from URL-safe format
+    let base64 = compressed.replace(/-/g, '+').replace(/_/g, '/');
+    // Add padding if needed
+    while (base64.length % 4) {
+      base64 += '=';
+    }
+    // Decode base64 to binary
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    // Decompress
+    const decompressed = pako.inflate(bytes, { to: 'string' });
+    return decompressed;
+  } catch (e) {
+    console.error('Decompression failed:', e);
+    return '';
+  }
+}
 
 export default function App() {
 
@@ -72,9 +111,28 @@ export default function App() {
   // Load markdown from query param, localStorage, or default
   const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion % |\n| --- | --- | ---: | --- | --- | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova | true | 0 |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova | true | 25 |\n| Products | Default product visibility for all | 0 | | Ventinova | true | 100 |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova | true | 50 |`;
   const [markdown, setMarkdown] = useState(() => {
-    const qp = getQueryParam('mdTable');
-    if (qp) {
-      let decodedMarkdown = decodeURIComponent(qp);
+    // Try compressed format first (mdData), then fall back to legacy format (mdTable)
+    const compressedQp = getQueryParam('mdData');
+    const legacyQp = getQueryParam('mdTable');
+    
+    if (compressedQp) {
+      // New compressed format
+      const decompressed = decompressData(compressedQp);
+      if (decompressed) {
+        let decodedMarkdown = decompressed;
+        // If it doesn't have headers, add them
+        decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
+        // Ensure all columns are present
+        decodedMarkdown = ensureAllColumns(decodedMarkdown);
+        // Apply include flags from query parameters
+        return applyIncludeFlagsFromQuery(decodedMarkdown);
+      }
+      // If decompression failed, fall through to legacy format or default
+    }
+    
+    if (legacyQp) {
+      // Legacy URL-encoded format (backward compatibility)
+      let decodedMarkdown = decodeURIComponent(legacyQp);
       // If it doesn't have headers, add them
       decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
       // Ensure all columns are present
@@ -82,6 +140,7 @@ export default function App() {
       // Apply include flags from query parameters
       return applyIncludeFlagsFromQuery(decodedMarkdown);
     }
+    
     try {
       const cached = localStorage.getItem('ganttMarkdownTable');
       // Ensure all columns are present in cached data
@@ -586,8 +645,12 @@ export default function App() {
                 onClick={() => {
                   const dataOnlyMarkdown = extractDataRows(markdown);
                   const includeFlags = getIncludeFlags;
+                  
+                  // Use compressed format for the markdown data
+                  const compressed = compressData(dataOnlyMarkdown);
+                  
                   const params = new URLSearchParams({
-                    mdTable: encodeURIComponent(dataOnlyMarkdown),
+                    mdData: compressed, // New compressed format
                     speed: String(speed),
                     hoursPerDay: String(hoursPerDay),
                     startDate: String(startDate),
@@ -697,8 +760,12 @@ export default function App() {
             {React.useEffect(() => {
               const dataOnlyMarkdown = extractDataRows(markdown);
               const includeFlags = getIncludeFlags;
+              
+              // Use compressed format for the markdown data
+              const compressed = compressData(dataOnlyMarkdown);
+              
               const params = new URLSearchParams({
-                mdTable: encodeURIComponent(dataOnlyMarkdown),
+                mdData: compressed, // New compressed format
                 speed: String(speed),
                 hoursPerDay: String(hoursPerDay),
                 startDate: String(startDate),
