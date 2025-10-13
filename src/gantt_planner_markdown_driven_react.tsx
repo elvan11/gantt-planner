@@ -74,10 +74,23 @@ export default function App() {
     return params.get(key);
   };
 
+  // Extract unified state from query param BEFORE any useState declarations
+  // This ensures the state is available during initialization
+  const extractedState = useMemo(() => {
+    const unifiedQp = getQueryParam('data');
+    if (unifiedQp) {
+      const state = decompressData(unifiedQp, true);
+      if (state) {
+        return state;
+      }
+    }
+    return null;
+  }, []); // Empty deps means this only runs once on mount
+
   // Function to apply include flags from query parameters (for backward compatibility only)
   const applyIncludeFlagsFromQuery = (markdown: string) => {
-    // If we have loadedState with includeFlags, apply those instead
-    if (loadedState && loadedState.includeFlags) {
+    // If we have extractedState with includeFlags, apply those instead
+    if (extractedState && extractedState.includeFlags) {
       const lines = markdown.split(/\r?\n/);
       let taskIndex = 0;
       
@@ -89,7 +102,7 @@ export default function App() {
         const cols = line.split('|').map(c => c.trim());
         if (cols.length < 3) return line;
         
-        const includeFlag = loadedState.includeFlags[`task${taskIndex}_include`];
+        const includeFlag = extractedState.includeFlags[`task${taskIndex}_include`];
         if (includeFlag !== undefined) {
           while (cols.length < 8) {
             cols.push(' ');
@@ -139,27 +152,19 @@ export default function App() {
   // Load markdown from query param, localStorage, or default
   const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion % |\n| --- | --- | ---: | --- | --- | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova | true | 0 |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova | true | 25 |\n| Products | Default product visibility for all | 0 | | Ventinova | true | 100 |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova | true | 50 |`;
   
-  // Store the loaded state from URL parameter
-  const [loadedState, setLoadedState] = useState<any>(null);
-  
   const [markdown, setMarkdown] = useState(() => {
     // Try new unified compressed format first (data), then fall back to legacy formats
-    const unifiedQp = getQueryParam('data');
     const mdDataQp = getQueryParam('mdData'); // Old compressed markdown-only format
     const legacyQp = getQueryParam('mdTable'); // Very old URL-encoded format
     
-    if (unifiedQp) {
+    if (extractedState && extractedState.markdown) {
       // New unified compressed format - contains all state
-      const state = decompressData(unifiedQp, true);
-      if (state && state.markdown) {
-        setLoadedState(state); // Store for other state values
-        let decodedMarkdown = state.markdown;
-        // If it doesn't have headers, add them
-        decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
-        // Ensure all columns are present
-        decodedMarkdown = ensureAllColumns(decodedMarkdown);
-        return decodedMarkdown;
-      }
+      let decodedMarkdown = extractedState.markdown;
+      // If it doesn't have headers, add them
+      decodedMarkdown = ensureMarkdownHeaders(decodedMarkdown);
+      // Ensure all columns are present
+      decodedMarkdown = ensureAllColumns(decodedMarkdown);
+      return decodedMarkdown;
     }
     
     if (mdDataQp) {
@@ -206,8 +211,8 @@ export default function App() {
   // LocalStorage-backed state for settings fields, but allow query param override
   const getCachedOrQuery = (key, fallback, qpKey) => {
     // First check if we have a value from the unified compressed state
-    if (loadedState && loadedState[key] !== undefined) {
-      return loadedState[key];
+    if (extractedState && extractedState[key] !== undefined) {
+      return extractedState[key];
     }
     
     // Then check individual query params (for backward compatibility)
@@ -351,8 +356,21 @@ export default function App() {
 
   // Effect: whenever markdown, tasks, or startDate changes, update starts from markdown start dates
   useEffect(() => {
-    // Build working days array for mapping dates to indices
-    const daysArr = buildWorkingDays({ startISO: startDate, count: 730, skipWeekends });
+    // Find the effective start date (earliest of startDate or task dates)
+    const taskDates = tasksWithIds
+      .map(t => t.startDateStr)
+      .filter(d => d && /^\d{4}-\d{2}-\d{2}$/.test(d));
+    
+    let effectiveStart = startDate;
+    if (taskDates.length > 0) {
+      const sortedDates = [...taskDates].sort();
+      const earliestTaskDate = sortedDates[0];
+      effectiveStart = earliestTaskDate < startDate ? earliestTaskDate : startDate;
+    }
+    
+    // Build working days array starting from effectiveStart
+    const daysArr = buildWorkingDays({ startISO: effectiveStart, count: 730, skipWeekends });
+    
     const newStarts = {};
     let cursor = 0;
     for (const t of tasksWithIds) {
@@ -387,10 +405,32 @@ export default function App() {
     return data;
   }, [tasksWithIds, starts, speed, hoursPerDay, skipWeekends, startDate]);
 
-  // For display horizon
+  // For display horizon - use the earliest of startDate or task dates
+  const effectiveStartDate = useMemo(() => {
+    const taskDates = tasksWithIds
+      .map(t => t.startDateStr)
+      .filter(d => d && /^\d{4}-\d{2}-\d{2}$/.test(d));
+    
+    if (taskDates.length === 0) return startDate;
+    
+    const sortedDates = [...taskDates].sort();
+    const earliestTaskDate = sortedDates[0];
+    
+    // Return the earlier of startDate or earliest task date
+    return earliestTaskDate < startDate ? earliestTaskDate : startDate;
+  }, [tasksWithIds, startDate]);
+  
   const days = useMemo(() => {
-    return buildWorkingDays({ startISO: startDate, count: schedule.horizonDays, skipWeekends });
-  }, [startDate, schedule.horizonDays, skipWeekends]);
+    // Calculate how many days we need to display
+    // If tasks start before startDate, we need extra days
+    let extraDays = 0;
+    if (effectiveStartDate < startDate) {
+      const diff = new Date(startDate).getTime() - new Date(effectiveStartDate).getTime();
+      extraDays = Math.ceil(diff / (1000 * 60 * 60 * 24));
+    }
+    
+    return buildWorkingDays({ startISO: effectiveStartDate, count: schedule.horizonDays + extraDays, skipWeekends });
+  }, [effectiveStartDate, startDate, schedule.horizonDays, skipWeekends]);
 
   // -------------------- Drag to move --------------------
   const dragState = useRef(null as null | {

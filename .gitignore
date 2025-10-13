@@ -11,6 +11,9 @@
 # production
 /build
 
+# generated files
+gantt_planner_standalone.html
+
 # misc
 .DS_Store
 .env.local
