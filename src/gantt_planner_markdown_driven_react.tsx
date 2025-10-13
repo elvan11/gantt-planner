@@ -152,7 +152,8 @@ export default function App() {
   // Load markdown from query param, localStorage, or default
   const defaultMarkdown = `| Epic | Task description | Estimated time in hours | Start date | Customer Request | Include in Algorithm | Completion % |\n| --- | --- | ---: | --- | --- | --- | --- |\n| Onboarding | More fields on registration (country/role) | 40 | | Ventinova | true | 0 |\n| Onboarding | Open access registration (auto-approve) | 20 | | Ventinova | true | 25 |\n| Products | Default product visibility for all | 0 | | Ventinova | true | 100 |\n| Notifications | Admin/user notifications for 2 & 3 | ~30h | | Ventinova | true | 50 |`;
   
-  const [markdown, setMarkdown] = useState(() => {
+  // Compute initial markdown value (extract from function for reuse)
+  const getInitialMarkdown = () => {
     // Try new unified compressed format first (data), then fall back to legacy formats
     const mdDataQp = getQueryParam('mdData'); // Old compressed markdown-only format
     const legacyQp = getQueryParam('mdTable'); // Very old URL-encoded format
@@ -200,7 +201,9 @@ export default function App() {
     } catch {
       return defaultMarkdown;
     }
-  });
+  };
+  
+  const [markdown, setMarkdown] = useState(() => getInitialMarkdown());
   // Save markdown to localStorage whenever it changes
   useEffect(() => {
     try {
@@ -239,7 +242,36 @@ export default function App() {
   const [hoursPerDay, setHoursPerDay] = useState(() => getCachedOrQuery('hoursPerDay', 8, 'hoursPerDay'));
   const todayISO = new Date().toISOString().slice(0, 10);
   const todayDate = useMemo(() => isoToLocalDate(todayISO), [todayISO]);
-  const [startDate, setStartDate] = useState(() => getCachedOrQuery('startDate', todayISO, 'startDate'));
+  
+  // Initialize startDate with special logic: if not in query string, use earliest date from markdown
+  const [startDate, setStartDate] = useState(() => {
+    // First check if we have a value from the unified compressed state
+    if (extractedState && extractedState.startDate !== undefined) {
+      return extractedState.startDate;
+    }
+    
+    // Then check individual query params (for backward compatibility)
+    const qp = getQueryParam('startDate');
+    if (qp !== null) {
+      return qp;
+    }
+    
+    // If no startDate in query string, try to use earliest date from markdown
+    const initialMarkdown = getInitialMarkdown();
+    const earliestDate = findEarliestDateInMarkdown(initialMarkdown);
+    if (earliestDate) {
+      return earliestDate;
+    }
+    
+    // Then check localStorage as fallback
+    try {
+      const v = localStorage.getItem('ganttStartDate');
+      if (v !== null) return v;
+    } catch {}
+    
+    // Finally, fall back to today's date
+    return todayISO;
+  });
   const [skipWeekends, setSkipWeekends] = useState(() => getCachedOrQuery('skipWeekends', true, 'skipWeekends'));
   // Filter and folding state
   const [customerFilter, setCustomerFilter] = useState(() => getCachedOrQuery('customerFilter', "", 'customerFilter'));
@@ -1313,6 +1345,20 @@ function computeSchedule({
 }
 
 // -------------------- Markdown Parser --------------------
+// Helper function to extract the earliest date from markdown table data
+function findEarliestDateInMarkdown(md: string): string | null {
+  const tasks = parseMarkdownTable(md);
+  const dates = tasks
+    .map(t => t.startDateStr)
+    .filter(dateStr => dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr));
+  
+  if (dates.length === 0) return null;
+  
+  // Sort dates and return the earliest
+  dates.sort();
+  return dates[0];
+}
+
 function parseMarkdownTable(md: string): Task[] {
   const lines = md
     .split(/\r?\n/)
